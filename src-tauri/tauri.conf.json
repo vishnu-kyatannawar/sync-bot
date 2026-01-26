@@ -1,0 +1,33 @@
+{
+  "productName": "Sync Bot",
+  "version": "1.0.0",
+  "identifier": "com.syncbot.app",
+  "build": {
+    "beforeDevCommand": "",
+    "beforeBuildCommand": "",
+    "devPath": "../src",
+    "distDir": "../src"
+  },
+  "app": {
+    "windows": [
+      {
+        "fullscreen": false,
+        "resizable": true,
+        "title": "Sync Bot",
+        "width": 900,
+        "height": 700,
+        "minWidth": 600,
+        "minHeight": 500
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "appimage",
+    "icon": []
+  },
+  "plugins": {}
+}

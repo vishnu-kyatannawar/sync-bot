@@ -1,0 +1,45 @@
+# Rust
+target/
+Cargo.lock
+
+# Node
+node_modules/
+package-lock.json
+
+# Tauri
+src-tauri/target/
+
+# Build outputs
+dist/
+*.AppImage
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.sublime-*
+
+# OS
+.DS_Store
+Thumbs.db
+*.orig
+
+# Config and data (user-specific - should not be committed)
+.config/
+.local/
+
+# Environment variables
+.env
+.env.local
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Temporary files
+*.tmp
+*.temp
+.cache/

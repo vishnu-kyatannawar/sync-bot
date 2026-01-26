@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sync Bot</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🔄 Sync Bot</h1>
+            <p class="subtitle">Google Drive Sync Manager</p>
+        </header>
+
+        <div class="status-panel">
+            <div class="status-item">
+                <span class="status-label">Status:</span>
+                <span id="sync-status" class="status-value">Ready</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">Last Sync:</span>
+                <span id="last-sync" class="status-value">Never</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">Next Sync:</span>
+                <span id="next-sync" class="status-value">-</span>
+            </div>
+        </div>
+
+        <div class="main-content">
+            <section class="sync-section">
+                <h2>Sync Configuration</h2>
+                
+                <div class="form-group">
+                    <label for="staging-dir">Staging Directory:</label>
+                    <div class="input-group">
+                        <input type="text" id="staging-dir" readonly>
+                        <button id="select-staging-dir" class="btn btn-secondary">Browse</button>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="drive-folder">Google Drive Folder Name:</label>
+                    <input type="text" id="drive-folder" placeholder="sync-bot-backups">
+                </div>
+
+                <div class="form-group">
+                    <label for="sync-interval">Sync Interval (minutes):</label>
+                    <input type="number" id="sync-interval" min="1" value="60">
+                </div>
+
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="auto-sync"> Enable automatic periodic sync
+                    </label>
+                </div>
+            </section>
+
+            <section class="files-section">
+                <h2>Tracked Files & Folders</h2>
+                <div class="file-list-container">
+                    <div id="file-list" class="file-list"></div>
+                    <button id="add-file" class="btn btn-primary">+ Add File/Folder</button>
+                </div>
+            </section>
+
+            <section class="actions-section">
+                <div class="button-group">
+                    <button id="sync-now" class="btn btn-primary btn-large">Sync Now</button>
+                    <button id="authenticate" class="btn btn-secondary">Authenticate Google Drive</button>
+                </div>
+            </section>
+
+            <section class="log-section">
+                <h2>Sync Log</h2>
+                <div id="log-output" class="log-output"></div>
+            </section>
+        </div>
+    </div>
+
+    <script type="module" src="main.js"></script>
+</body>
+</html>
