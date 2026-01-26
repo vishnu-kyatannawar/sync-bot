@@ -14,6 +14,9 @@ src-tauri/gen/
 dist/
 *.AppImage
 
+# Keep release artifacts (they're versioned)
+!releases/**/*.AppImage
+
 # IDE
 .vscode/
 .idea/
