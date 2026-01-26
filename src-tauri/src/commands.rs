@@ -156,8 +156,14 @@ pub async fn sync_now() -> Result<SyncResult, String> {
                         staging_dir.join("tracked").join(file_name)
                     } else {
                         // Base is a directory, preserve its structure
-                        // rel already contains the folder structure relative to base
-                        staging_dir.join("tracked").join(rel)
+                        // Get the base folder name to maintain structure in ZIP
+                        if let Some(base_name) = base.file_name() {
+                            // Include base folder name: tracked/base_name/relative_path
+                            staging_dir.join("tracked").join(base_name).join(rel)
+                        } else {
+                            // Fallback: just use relative path
+                            staging_dir.join("tracked").join(rel)
+                        }
                     }
                 } else {
                     // Fallback: use filename
