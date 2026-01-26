@@ -10,14 +10,17 @@
     <div class="container">
         <header>
             <h1>🔄 Sync Bot</h1>
-            <p class="subtitle">Google Drive Sync Manager</p>
+            <p class="subtitle">Intelligent Google Drive Sync Manager</p>
+            <p class="description">Automatically sync your files to Google Drive with smart change detection and version history</p>
         </header>
 
-        <div class="status-panel">
-            <div class="status-item">
-                <span class="status-label">Status:</span>
-                <span id="sync-status" class="status-value">Ready</span>
-            </div>
+            <section class="status-panel">
+                <div class="status-item">
+                    <span class="status-label">Status:</span>
+                    <span id="sync-status" class="status-value">Ready</span>
+                </div>
+                <button id="test-js" class="btn btn-secondary" style="margin-left: auto; padding: 2px 8px; font-size: 10px;">Test UI</button>
+            </section>
             <div class="status-item">
                 <span class="status-label">Last Sync:</span>
                 <span id="last-sync" class="status-value">Never</span>
@@ -30,55 +33,110 @@
 
         <div class="main-content">
             <section class="sync-section">
-                <h2>Sync Configuration</h2>
+                <h2>⚙️ Sync Configuration</h2>
+                <p class="section-help">Configure where to store local copies and how often to sync</p>
                 
                 <div class="form-group">
-                    <label for="staging-dir">Staging Directory:</label>
-                    <div class="input-group">
-                        <input type="text" id="staging-dir" readonly>
-                        <button id="select-staging-dir" class="btn btn-secondary">Browse</button>
-                    </div>
-                </div>
-
-                <div class="form-group">
-                    <label for="drive-folder">Google Drive Folder Name:</label>
-                    <input type="text" id="drive-folder" placeholder="sync-bot-backups">
-                </div>
-
-                <div class="form-group">
-                    <label for="sync-interval">Sync Interval (minutes):</label>
-                    <input type="number" id="sync-interval" min="1" value="60">
-                </div>
-
-                <div class="form-group">
-                    <label>
-                        <input type="checkbox" id="auto-sync"> Enable automatic periodic sync
+                    <label for="staging-dir">
+                        📁 Staging Directory:
+                        <span class="help-icon" title="Local directory where files will be copied before syncing to Google Drive">ⓘ</span>
                     </label>
+                    <div class="input-group">
+                        <input type="text" id="staging-dir" readonly placeholder="Select a directory...">
+                        <button id="select-staging-dir" class="btn btn-secondary" title="Choose where to store local copies of synced files">
+                            Browse
+                        </button>
+                    </div>
+                    <small class="help-text">Local copies of your files will be stored here before syncing</small>
+                </div>
+
+                <div class="form-group">
+                    <label for="drive-folder">
+                        ☁️ Google Drive Folder Name:
+                        <span class="help-icon" title="Name of the folder that will be created in your Google Drive">ⓘ</span>
+                    </label>
+                    <input type="text" id="drive-folder" placeholder="sync-bot-backups">
+                    <small class="help-text">Your files will be synced to this folder in Google Drive</small>
+                </div>
+
+                <div class="form-group">
+                    <label for="sync-interval">
+                        ⏱️ Sync Interval (minutes):
+                        <span class="help-icon" title="How often to automatically sync (when auto-sync is enabled)">ⓘ</span>
+                    </label>
+                    <input type="number" id="sync-interval" min="1" value="60">
+                    <small class="help-text">How often to run automatic syncs (minimum 1 minute)</small>
+                </div>
+
+                <div class="form-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="auto-sync">
+                        <span>Enable automatic periodic sync</span>
+                        <span class="help-icon" title="Automatically sync files at the specified interval">ⓘ</span>
+                    </label>
+                    <small class="help-text">When enabled, files will sync automatically based on the interval above</small>
                 </div>
             </section>
 
             <section class="files-section">
-                <h2>Tracked Files & Folders</h2>
+                <h2>📂 Tracked Files & Folders</h2>
+                <p class="section-help">Add files and folders you want to sync to Google Drive</p>
                 <div class="file-list-container">
-                    <div id="file-list" class="file-list"></div>
-                    <button id="add-file" class="btn btn-primary">+ Add File/Folder</button>
+                    <div id="file-list" class="file-list">
+                        <div class="empty-state">
+                            <p>📭 No files or folders tracked yet</p>
+                            <p>Click "Add File/Folder" to select files or folders to sync</p>
+                        </div>
+                    </div>
+                    <button id="add-file" class="btn btn-primary" title="Select files or folders to track for syncing">
+                        ➕ Add File/Folder
+                    </button>
+                </div>
+                <div class="info-box">
+                    <strong>💡 Smart Sync:</strong> Only files that have changed will be uploaded. The app uses SHA256 hashing to detect changes.
                 </div>
             </section>
 
             <section class="actions-section">
+                <h2>🚀 Actions</h2>
                 <div class="button-group">
-                    <button id="sync-now" class="btn btn-primary btn-large">Sync Now</button>
-                    <button id="authenticate" class="btn btn-secondary">Authenticate Google Drive</button>
+                    <button id="sync-now" class="btn btn-primary btn-large" title="Manually trigger a sync right now">
+                        🔄 Sync Now
+                    </button>
+                    <button id="authenticate" class="btn btn-secondary" title="Connect your Google Drive account">
+                        🔑 Authenticate Google Drive
+                    </button>
+                </div>
+                <div class="info-box">
+                    <strong>⚠️ First Time Setup:</strong> Click "Authenticate Google Drive" to connect your Google account before syncing.
                 </div>
             </section>
 
             <section class="log-section">
-                <h2>Sync Log</h2>
-                <div id="log-output" class="log-output"></div>
+                <h2>📝 Sync Log</h2>
+                <p class="section-help">Real-time updates on sync operations</p>
+                <div id="log-output" class="log-output">
+                    <div class="log-entry info">[Waiting] Ready to sync. Configure settings above and click "Sync Now" or enable auto-sync.</div>
+                </div>
+            </section>
+
+            <section class="help-section">
+                <h2>❓ Quick Help</h2>
+                <div class="help-content">
+                    <div class="help-item">
+                        <strong>Version History:</strong> The app keeps the last 4 sync copies as timestamped zip files in the archives directory.
+                    </div>
+                    <div class="help-item">
+                        <strong>Change Detection:</strong> Only changed files are synced, saving bandwidth and time.
+                    </div>
+                    <div class="help-item">
+                        <strong>Local Copies:</strong> All tracked files are copied to the staging directory before uploading to Google Drive.
+                    </div>
+                </div>
             </section>
         </div>
     </div>
 
-    <script type="module" src="main.js"></script>
+    <script src="main.js"></script>
 </body>
 </html>

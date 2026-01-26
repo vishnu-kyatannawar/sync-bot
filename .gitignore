@@ -38,6 +38,7 @@ Thumbs.db
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+logs/*.log
 
 # Temporary files
 *.tmp

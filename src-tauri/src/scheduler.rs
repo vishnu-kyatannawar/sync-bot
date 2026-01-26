@@ -1,6 +1,6 @@
-use tauri::AppHandle;
 use tokio::time::{sleep, Duration};
 use anyhow::Result;
+use tauri::Emitter;
 
 pub async fn start_scheduler(app_handle: tauri::AppHandle) {
     let mut interval = Duration::from_secs(60); // Default 1 minute check interval
@@ -33,6 +33,6 @@ async fn perform_scheduled_sync(app_handle: &tauri::AppHandle) -> Result<()> {
     // This will be called by the scheduler
     // The actual sync logic is in commands.rs
     // We can emit an event to trigger sync from the frontend if needed
-    app_handle.emit_all("scheduled-sync", ())?;
+    app_handle.emit("scheduled-sync", ())?;
     Ok(())
 }

@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 use std::fs;
-use std::io::Write;
 use zip::write::{FileOptions, ZipWriter};
 use zip::CompressionMethod;
 use chrono::Local;
@@ -102,6 +101,7 @@ fn cleanup_old_archives(archives_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 pub fn get_archive_count(archives_dir: &Path) -> Result<usize> {
     if !archives_dir.exists() {
         return Ok(0);

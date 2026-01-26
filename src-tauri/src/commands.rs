@@ -1,19 +1,34 @@
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::path::PathBuf;
 use anyhow::Result;
 
 #[tauri::command]
 pub fn get_config() -> Result<crate::config::Config, String> {
-    crate::config::load_config()
-        .map_err(|e| e.to_string())
+    crate::logger::log_info("Command: get_config called");
+    let result = crate::config::load_config()
+        .map_err(|e| {
+            let msg = format!("get_config error: {}", e);
+            crate::logger::log_error(&msg);
+            e.to_string()
+        });
+    if result.is_ok() {
+        crate::logger::log_info("get_config completed successfully");
+    }
+    result
 }
 
 #[tauri::command]
 pub fn set_staging_dir(path: String) -> Result<(), String> {
+    crate::logger::log_info(&format!("Command: set_staging_dir called with path: {}", path));
     crate::config::update_config(|config| {
-        config.staging_dir = Some(path);
+        config.staging_dir = Some(path.clone());
     })
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| {
+        let msg = format!("set_staging_dir error: {}", e);
+        crate::logger::log_error(&msg);
+        e.to_string()
+    })?;
+    crate::logger::log_info("set_staging_dir completed successfully");
     Ok(())
 }
 
@@ -127,8 +142,6 @@ pub async fn sync_now() -> Result<SyncResult, String> {
                 } else {
                     // File is outside staging, need to copy it
                     // Get relative path from original tracked path
-                    let mut relative_path = PathBuf::new();
-                    
                     // Find which tracked path this file belongs to
                     let tracked_paths = crate::file_tracker::get_tracked_paths()
                         .map_err(|e| format!("Failed to get tracked paths: {}", e))?;
@@ -142,23 +155,23 @@ pub async fn sync_now() -> Result<SyncResult, String> {
                         }
                     }
                     
-                    if let Some(base) = found_base {
+                    let relative_path = if let Some(base) = found_base {
                         if let Ok(rel) = file_path.strip_prefix(&base) {
-                            relative_path = staging_dir.join("tracked").join(rel);
+                            staging_dir.join("tracked").join(rel)
                         } else {
                             // Fallback: use filename
                             let file_name = file_path.file_name()
                                 .and_then(|n| n.to_str())
                                 .unwrap_or("unknown");
-                            relative_path = staging_dir.join("tracked").join(file_name);
+                            staging_dir.join("tracked").join(file_name)
                         }
                     } else {
                         // No base found, use filename
                         let file_name = file_path.file_name()
                             .and_then(|n| n.to_str())
                             .unwrap_or("unknown");
-                        relative_path = staging_dir.join("tracked").join(file_name);
-                    }
+                        staging_dir.join("tracked").join(file_name)
+                    };
                     
                     // Ensure parent directories exist
                     if let Some(parent) = relative_path.parent() {

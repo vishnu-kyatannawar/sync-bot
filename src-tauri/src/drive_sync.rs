@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::fs;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -115,7 +115,7 @@ impl DriveSync {
             ("refresh_token", refresh_token),
             ("client_id", &client_id),
             ("client_secret", &client_secret),
-            ("grant_type", "refresh_token"),
+            ("grant_type", &"refresh_token".to_string()),
         ];
         
         let response = self.client
@@ -184,7 +184,7 @@ impl DriveSync {
         let response = self.client
             .get(&format!("{}/files", GOOGLE_DRIVE_API_BASE))
             .bearer_auth(token)
-            .query(&[("q", &query), ("fields", "files(id,name)")])
+            .query(&[("q", &query), ("fields", &"files(id,name)".to_string())])
             .send()
             .await
             .context("Failed to search for folder")?;
@@ -234,7 +234,7 @@ impl DriveSync {
         let response = self.client
             .get(&format!("{}/files", GOOGLE_DRIVE_API_BASE))
             .bearer_auth(token)
-            .query(&[("q", &query), ("fields", "files(id)")])
+            .query(&[("q", &query), ("fields", &"files(id)".to_string())])
             .send()
             .await
             .context("Failed to check for existing file")?;
@@ -295,15 +295,17 @@ impl DriveSync {
                 .await
                 .context("Failed to upload file")?;
             
-            if !response.status().is_success() {
+            // Check status and handle error or success
+            let status = response.status();
+            if status.is_success() {
+                let file: DriveFile = response.json().await
+                    .context("Failed to parse upload response")?;
+                Ok(file.id)
+            } else {
+                let status_code = status.as_u16();
                 let error_text = response.text().await.unwrap_or_default();
-                anyhow::bail!("Failed to upload file: {} - {}", response.status(), error_text);
+                anyhow::bail!("Failed to upload file: {} - {}", status_code, error_text);
             }
-            
-            let file: DriveFile = response.json().await
-                .context("Failed to parse upload response")?;
-            
-            Ok(file.id)
         }
     }
 

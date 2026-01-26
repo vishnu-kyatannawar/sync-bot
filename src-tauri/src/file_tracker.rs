@@ -2,7 +2,7 @@ use rusqlite::{Connection, Result as SqlResult};
 use std::path::{Path, PathBuf};
 use sha2::{Sha256, Digest};
 use std::fs;
-use std::io::{self, Read};
+use std::io::Read;
 use std::time::SystemTime;
 use anyhow::{Result, Context};
 use serde::{Deserialize, Serialize};
