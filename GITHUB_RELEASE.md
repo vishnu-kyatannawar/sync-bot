@@ -73,4 +73,5 @@ MIT
 
 The AppImage is ready at:
 - **Path**: `releases/v1.0.0/sync-bot_1.0.0_amd64.AppImage`
-- **Size**: Check with `ls -lh releases/v1.0.0/`
+- **Size**: ~102 MB (exceeds GitHub's 100MB limit, so not committed to repo)
+- **Note**: The AppImage is in `.gitignore` and should be uploaded directly to GitHub releases, not committed to the repository
