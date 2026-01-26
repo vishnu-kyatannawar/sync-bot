@@ -325,7 +325,7 @@ async function updateAuthUI() {
         logDebug('Auth status check', { isAuthenticated });
         
         if (isAuthenticated) {
-            authenticateBtn.innerHTML = '✅ Google Drive Connected';
+            authenticateBtn.innerHTML = 'Google Drive Connected';
             authenticateBtn.classList.remove('btn-secondary');
             authenticateBtn.classList.add('btn-success');
             // authenticateBtn.disabled = true; // Allow clicking if they want to re-auth
@@ -342,7 +342,7 @@ async function updateAuthUI() {
                 resetLink.textContent = 'Switch Account / Re-authenticate';
                 resetLink.onclick = (e) => {
                     e.preventDefault();
-                    authenticateBtn.innerHTML = '🔑 Authenticate Google Drive';
+                    authenticateBtn.innerHTML = 'Authenticate';
                     authenticateBtn.classList.remove('btn-success');
                     authenticateBtn.classList.add('btn-secondary');
                     resetLink.remove();
@@ -361,7 +361,7 @@ async function loadTrackedFiles() {
         fileListEl.innerHTML = '';
         
         if (files.length === 0) {
-            fileListEl.innerHTML = '<div class="empty-state"><p>No files or folders tracked yet.</p><p>Click "Add File/Folder" to get started.</p></div>';
+            fileListEl.innerHTML = '<div class="empty-state">No files tracked yet</div>';
             return;
         }
 
