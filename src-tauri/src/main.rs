@@ -55,6 +55,7 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::get_version,
             commands::get_config,
             commands::set_staging_dir,
             commands::set_drive_folder,

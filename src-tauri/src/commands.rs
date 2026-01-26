@@ -4,6 +4,11 @@ use anyhow::Result;
 use zip::{write::FileOptions, CompressionMethod};
 
 #[tauri::command]
+pub fn get_version() -> String {
+    "1.0.0".to_string()
+}
+
+#[tauri::command]
 pub fn get_config() -> Result<crate::config::Config, String> {
     crate::logger::log_info("Command: get_config called");
     let result = crate::config::load_config()

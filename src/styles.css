@@ -43,6 +43,16 @@ header h1 {
     font-size: 1.5em;
     font-weight: 600;
     color: var(--primary-color);
+    margin: 0;
+}
+
+.version-badge {
+    font-size: 11px;
+    color: var(--secondary-color);
+    background: var(--bg-color);
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-weight: 500;
 }
 
 .status-panel {
