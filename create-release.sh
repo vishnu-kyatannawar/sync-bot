@@ -32,10 +32,11 @@ APPIMAGE_NAME=$(basename "$APPIMAGE_PATH")
 RELEASE_DIR="releases/v${VERSION}"
 mkdir -p "$RELEASE_DIR"
 
-# Copy AppImage to release directory
-cp "$APPIMAGE_PATH" "$RELEASE_DIR/"
+# Copy AppImage to release directory with a clean name
+RELEASE_APPIMAGE_NAME="sync-bot_${VERSION}_amd64.AppImage"
+cp "$APPIMAGE_PATH" "$RELEASE_DIR/$RELEASE_APPIMAGE_NAME"
 
-echo "✅ Copied AppImage to $RELEASE_DIR/"
+echo "✅ Copied AppImage to $RELEASE_DIR/$RELEASE_APPIMAGE_NAME"
 
 # Check if tag already exists
 if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
