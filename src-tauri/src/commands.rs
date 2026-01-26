@@ -249,39 +249,11 @@ pub async fn sync_now() -> Result<SyncResult, String> {
             .map_err(|e| format!("Failed to create ZIP file: {}", e))?;
         let mut zip = zip::ZipWriter::new(file);
         
-        // Add all files from staging directory to ZIP (excluding the zip file itself)
-        let entries = std::fs::read_dir(&staging_dir)
-            .map_err(|e| format!("Failed to read staging directory: {}", e))?;
-        
-        for entry in entries {
-            let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
-            let path = entry.path();
-            
-            // Skip the zip file itself
-            if path == zip_path {
-                continue;
-            }
-            
-            let relative_path = path.strip_prefix(&staging_dir)
-                .map_err(|e| format!("Failed to get relative path: {}", e))?;
-            
-            if path.is_file() {
-                let mut file = std::fs::File::open(&path)
-                    .map_err(|e| format!("Failed to open file: {}", e))?;
-                
-                zip.start_file(relative_path.to_string_lossy().as_ref(), FileOptions::default()
-                    .compression_method(CompressionMethod::Deflated))
-                    .map_err(|e| format!("Failed to add file to ZIP: {}", e))?;
-                
-                std::io::copy(&mut file, &mut zip)
-                    .map_err(|e| format!("Failed to write file to ZIP: {}", e))?;
-            } else if path.is_dir() {
-                zip.add_directory(relative_path.to_string_lossy().as_ref(), FileOptions::default())
-                    .map_err(|e| format!("Failed to add directory to ZIP: {}", e))?;
-                
-                crate::version_manager::add_directory_to_zip(&mut zip, &staging_dir, &path, relative_path.to_string_lossy().as_ref())
-                    .map_err(|e| format!("Failed to add directory contents to ZIP: {}", e))?;
-            }
+        // Add files from the "tracked" subdirectory, but without the "tracked" folder wrapper
+        let tracked_dir = staging_dir.join("tracked");
+        if tracked_dir.exists() {
+            crate::version_manager::add_directory_to_zip(&mut zip, &tracked_dir, &tracked_dir, "")
+                .map_err(|e| format!("Failed to add files to ZIP: {}", e))?;
         }
         
         zip.finish()
