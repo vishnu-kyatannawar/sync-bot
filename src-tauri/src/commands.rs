@@ -149,24 +149,25 @@ pub async fn sync_now() -> Result<SyncResult, String> {
             let relative_path = if let Some(ref base) = found_base {
                 if let Ok(rel) = file_path.strip_prefix(base) {
                     if rel.as_os_str().is_empty() {
+                        // Base is the file itself (single file tracked)
                         let file_name = file_path.file_name()
                             .and_then(|n| n.to_str())
                             .unwrap_or("unknown");
                         staging_dir.join("tracked").join(file_name)
                     } else {
-                        if let Some(base_name) = base.file_name() {
-                            staging_dir.join("tracked").join(base_name).join(rel)
-                        } else {
-                            staging_dir.join("tracked").join(rel)
-                        }
+                        // Base is a directory, preserve its structure
+                        // rel already contains the folder structure relative to base
+                        staging_dir.join("tracked").join(rel)
                     }
                 } else {
+                    // Fallback: use filename
                     let file_name = file_path.file_name()
                         .and_then(|n| n.to_str())
                         .unwrap_or("unknown");
                     staging_dir.join("tracked").join(file_name)
                 }
             } else {
+                // No base found, use filename
                 let file_name = file_path.file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("unknown");
