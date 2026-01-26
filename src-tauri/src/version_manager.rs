@@ -29,7 +29,7 @@ pub fn create_archive(source_dir: &Path, archives_dir: &Path) -> Result<PathBuf>
     Ok(archive_path)
 }
 
-fn add_directory_to_zip(
+pub fn add_directory_to_zip(
     zip: &mut ZipWriter<fs::File>,
     base_path: &Path,
     current_path: &Path,

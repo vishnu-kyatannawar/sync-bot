@@ -10,6 +10,8 @@ pub struct Config {
     pub drive_folder: Option<String>,
     pub sync_interval: Option<u64>, // minutes
     pub auto_sync: Option<bool>,
+    pub client_id: Option<String>,
+    pub client_secret: Option<String>,
 }
 
 impl Default for Config {
@@ -19,6 +21,8 @@ impl Default for Config {
             drive_folder: Some("sync-bot-backups".to_string()),
             sync_interval: Some(60),
             auto_sync: Some(false),
+            client_id: None,
+            client_secret: None,
         }
     }
 }

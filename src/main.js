@@ -32,11 +32,17 @@ const stagingDirEl = document.getElementById('staging-dir');
 const driveFolderEl = document.getElementById('drive-folder');
 const syncIntervalEl = document.getElementById('sync-interval');
 const autoSyncEl = document.getElementById('auto-sync');
+const clientIdEl = document.getElementById('client-id');
+const clientSecretEl = document.getElementById('client-secret');
 const fileListEl = document.getElementById('file-list');
 const syncNowBtn = document.getElementById('sync-now');
 const authenticateBtn = document.getElementById('authenticate');
+const oauthCallbackSection = document.getElementById('oauth-callback-section');
+const authCodeEl = document.getElementById('auth-code');
+const submitAuthCodeBtn = document.getElementById('submit-auth-code');
 const selectStagingDirBtn = document.getElementById('select-staging-dir');
 const addFileBtn = document.getElementById('add-file');
+const addFolderBtn = document.getElementById('add-folder');
 const logOutputEl = document.getElementById('log-output');
 const testJsBtn = document.getElementById('test-js');
 
@@ -60,6 +66,9 @@ async function init() {
     try {
         log('Initializing application data...', 'info');
         
+        // Check auth status
+        await updateAuthUI();
+        
         // 2. Load configuration
         try {
             logDebug('Loading configuration from backend');
@@ -70,6 +79,8 @@ async function init() {
                 if (config.drive_folder) driveFolderEl.value = config.drive_folder;
                 if (config.sync_interval) syncIntervalEl.value = config.sync_interval;
                 if (config.auto_sync !== undefined) autoSyncEl.checked = config.auto_sync;
+                if (config.client_id) clientIdEl.value = config.client_id;
+                if (config.client_secret) clientSecretEl.value = config.client_secret;
                 log('Configuration loaded', 'success');
             }
         } catch (e) {
@@ -161,22 +172,50 @@ function setupEventListeners() {
     });
 
     addFileBtn.addEventListener('click', async () => {
+        logDebug('=== Add File Button Clicked ===');
         try {
             const selected = await open({
                 directory: false,
-                multiple: true
+                multiple: true,
+                title: 'Select Files to Sync'
             });
+            logDebug('File selection dialog returned', { selected });
             if (selected && selected.length > 0) {
                 for (const path of selected) {
                     await invoke('add_tracked_path', { path });
                 }
                 await loadTrackedFiles();
-                log(`Added ${selected.length} file(s)/folder(s)`, 'success');
+                log(`Added ${selected.length} file(s)`, 'success');
             }
         } catch (error) {
+            logError('Error adding files', error);
             log(`Error adding files: ${error}`, 'error');
         }
     });
+
+    if (addFolderBtn) {
+        addFolderBtn.addEventListener('click', async () => {
+            logDebug('=== Add Folder Button Clicked ===');
+            try {
+                const selected = await open({
+                    directory: true,
+                    multiple: true,
+                    title: 'Select Folders to Sync (Recursive)'
+                });
+                logDebug('Folder selection dialog returned', { selected });
+                if (selected && selected.length > 0) {
+                    for (const path of selected) {
+                        await invoke('add_tracked_path', { path });
+                    }
+                    await loadTrackedFiles();
+                    log(`Added ${selected.length} folder(s)`, 'success');
+                }
+            } catch (error) {
+                logError('Error adding folders', error);
+                log(`Error adding folders: ${error}`, 'error');
+            }
+        });
+    }
 
     syncNowBtn.addEventListener('click', async () => {
         try {
@@ -201,20 +240,70 @@ function setupEventListeners() {
 
     authenticateBtn.addEventListener('click', async () => {
         try {
+            if (!clientIdEl.value || !clientSecretEl.value) {
+                log('Please enter your Google Client ID and Secret first', 'warning');
+                return;
+            }
             authenticateBtn.disabled = true;
             log('Starting Google Drive authentication...', 'info');
+            
+            // 1. Get the auth URL
             const url = await invoke('get_auth_url');
-            // Open browser for OAuth
+            
+            // 2. Open browser for OAuth
             await invoke('open_url', { url });
-            log('Please complete authentication in the browser', 'info');
+            log('Browser opened. Please complete authentication in the browser...', 'info');
+            
+            // 3. Automatically listen for the code (no more copy-paste!)
+            log('Waiting for authentication from browser...', 'info');
+            const code = await invoke('listen_for_oauth_code');
+            
+            // 4. Handle the received code
+            log('Code received! Finalizing authentication...', 'info');
+            await invoke('handle_oauth_code', { code });
+            log('Google Drive authenticated successfully!', 'success');
+            
+            await updateAuthUI();
+            oauthCallbackSection.style.display = 'none';
         } catch (error) {
             log(`Authentication error: ${error}`, 'error');
+            // Fallback: show the manual entry section if automatic fails
+            oauthCallbackSection.style.display = 'block';
         } finally {
             authenticateBtn.disabled = false;
         }
     });
 
+    if (submitAuthCodeBtn) {
+        submitAuthCodeBtn.addEventListener('click', async () => {
+            const code = authCodeEl.value.trim();
+            if (!code) return;
+            
+            try {
+                submitAuthCodeBtn.disabled = true;
+                log('Submitting authorization code...', 'info');
+                await invoke('handle_oauth_code', { code });
+                log('Google Drive authenticated successfully!', 'success');
+                await updateAuthUI();
+                oauthCallbackSection.style.display = 'none';
+                authCodeEl.value = '';
+            } catch (error) {
+                log(`Error submitting code: ${error}`, 'error');
+            } finally {
+                submitAuthCodeBtn.disabled = false;
+            }
+        });
+    }
+
     // Save config on change
+    clientIdEl.addEventListener('change', async () => {
+        await invoke('set_google_client_id', { id: clientIdEl.value });
+    });
+
+    clientSecretEl.addEventListener('change', async () => {
+        await invoke('set_google_client_secret', { secret: clientSecretEl.value });
+    });
+
     driveFolderEl.addEventListener('change', async () => {
         await invoke('set_drive_folder', { folder: driveFolderEl.value });
     });
@@ -226,6 +315,42 @@ function setupEventListeners() {
     autoSyncEl.addEventListener('change', async () => {
         await invoke('set_auto_sync', { enabled: autoSyncEl.checked });
     });
+}
+
+async function updateAuthUI() {
+    try {
+        const isAuthenticated = await invoke('check_auth_status');
+        logDebug('Auth status check', { isAuthenticated });
+        
+        if (isAuthenticated) {
+            authenticateBtn.innerHTML = '✅ Google Drive Connected';
+            authenticateBtn.classList.remove('btn-secondary');
+            authenticateBtn.classList.add('btn-success');
+            // authenticateBtn.disabled = true; // Allow clicking if they want to re-auth
+            
+            // Add a small reset link if they want to switch accounts
+            if (!document.getElementById('auth-reset')) {
+                const resetLink = document.createElement('a');
+                resetLink.id = 'auth-reset';
+                resetLink.href = '#';
+                resetLink.style.display = 'block';
+                resetLink.style.fontSize = '11px';
+                resetLink.style.marginTop = '5px';
+                resetLink.style.color = 'var(--secondary-color)';
+                resetLink.textContent = 'Switch Account / Re-authenticate';
+                resetLink.onclick = (e) => {
+                    e.preventDefault();
+                    authenticateBtn.innerHTML = '🔑 Authenticate Google Drive';
+                    authenticateBtn.classList.remove('btn-success');
+                    authenticateBtn.classList.add('btn-secondary');
+                    resetLink.remove();
+                };
+                authenticateBtn.parentNode.appendChild(resetLink);
+            }
+        }
+    } catch (error) {
+        logError('Error checking auth status', error);
+    }
 }
 
 async function loadTrackedFiles() {

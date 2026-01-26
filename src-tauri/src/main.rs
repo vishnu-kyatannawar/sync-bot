@@ -65,9 +65,13 @@ fn main() {
             commands::remove_tracked_path,
             commands::sync_now,
             commands::get_sync_status,
-            commands::get_auth_url,
-            commands::open_url,
-            commands::handle_oauth_code,
+                    commands::get_auth_url,
+                    commands::open_url,
+                    commands::handle_oauth_code,
+                    commands::check_auth_status,
+                    commands::listen_for_oauth_code,
+                    commands::set_google_client_id,
+            commands::set_google_client_secret,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

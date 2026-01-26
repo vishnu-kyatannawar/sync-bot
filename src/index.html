@@ -35,6 +35,22 @@
             <section class="sync-section">
                 <h2>⚙️ Sync Configuration</h2>
                 <p class="section-help">Configure where to store local copies and how often to sync</p>
+
+                <div class="form-group">
+                    <label for="client-id">
+                        🔑 Google Client ID:
+                        <span class="help-icon" title="Your Google Cloud Console OAuth Client ID">ⓘ</span>
+                    </label>
+                    <input type="password" id="client-id" placeholder="Enter your Client ID...">
+                </div>
+
+                <div class="form-group">
+                    <label for="client-secret">
+                        🔒 Google Client Secret:
+                        <span class="help-icon" title="Your Google Cloud Console OAuth Client Secret">ⓘ</span>
+                    </label>
+                    <input type="password" id="client-secret" placeholder="Enter your Client Secret...">
+                </div>
                 
                 <div class="form-group">
                     <label for="staging-dir">
@@ -85,15 +101,20 @@
                     <div id="file-list" class="file-list">
                         <div class="empty-state">
                             <p>📭 No files or folders tracked yet</p>
-                            <p>Click "Add File/Folder" to select files or folders to sync</p>
+                            <p>Click "Add File" or "Add Folder" to select items to sync</p>
                         </div>
                     </div>
-                    <button id="add-file" class="btn btn-primary" title="Select files or folders to track for syncing">
-                        ➕ Add File/Folder
-                    </button>
+                    <div class="button-group">
+                        <button id="add-file" class="btn btn-primary" title="Select files to track for syncing">
+                            📄 Add File
+                        </button>
+                        <button id="add-folder" class="btn btn-primary" title="Select folders to track for syncing recursively">
+                            📁 Add Folder
+                        </button>
+                    </div>
                 </div>
                 <div class="info-box">
-                    <strong>💡 Smart Sync:</strong> Only files that have changed will be uploaded. The app uses SHA256 hashing to detect changes.
+                    <strong>💡 Smart Sync:</strong> Only files that have changed will be uploaded. The app uses SHA256 hashing to detect changes. Hidden files (starting with ".") are included automatically.
                 </div>
             </section>
 
@@ -107,6 +128,15 @@
                         🔑 Authenticate Google Drive
                     </button>
                 </div>
+                
+                <div id="oauth-callback-section" class="form-group" style="display: none; margin-top: 20px;">
+                    <label for="auth-code">Enter Authorization Code from Google:</label>
+                    <div class="input-group">
+                        <input type="text" id="auth-code" placeholder="Paste the code here...">
+                        <button id="submit-auth-code" class="btn btn-primary">Submit Code</button>
+                    </div>
+                </div>
+
                 <div class="info-box">
                     <strong>⚠️ First Time Setup:</strong> Click "Authenticate Google Drive" to connect your Google account before syncing.
                 </div>

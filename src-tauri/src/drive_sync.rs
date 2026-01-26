@@ -8,11 +8,13 @@ const GOOGLE_OAUTH_AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/aut
 const GOOGLE_OAUTH_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const GOOGLE_DRIVE_API_BASE: &str = "https://www.googleapis.com/drive/v3";
 
-// These should be set via environment or config in production
-// For now, using placeholder - user will need to set these
+// Standard loopback URI for desktop apps
+pub const REDIRECT_PORT: u16 = 14242;
+pub const REDIRECT_URI: &str = "http://localhost:14242";
+
+// Default placeholders
 const DEFAULT_CLIENT_ID: &str = "YOUR_CLIENT_ID";
 const DEFAULT_CLIENT_SECRET: &str = "YOUR_CLIENT_SECRET";
-const REDIRECT_URI: &str = "urn:ietf:wg:oauth:2.0:oob"; // Use out-of-band for desktop apps
 
 #[derive(Debug, Serialize, Deserialize)]
 struct TokenResponse {
@@ -26,6 +28,7 @@ struct TokenResponse {
 struct DriveFile {
     id: String,
     name: String,
+    #[serde(rename = "mimeType")]
     mime_type: String,
     parents: Option<Vec<String>>,
 }
@@ -46,11 +49,13 @@ impl DriveSync {
     }
 
     pub fn get_auth_url() -> Result<String> {
-        let client_id = std::env::var("GOOGLE_CLIENT_ID")
-            .unwrap_or_else(|_| DEFAULT_CLIENT_ID.to_string());
+        let config = crate::config::load_config()?;
+        let client_id = config.client_id
+            .or_else(|| std::env::var("GOOGLE_CLIENT_ID").ok())
+            .unwrap_or_else(|| DEFAULT_CLIENT_ID.to_string());
         
         if client_id == DEFAULT_CLIENT_ID {
-            anyhow::bail!("Please set GOOGLE_CLIENT_ID environment variable or configure it in the app");
+            anyhow::bail!("Please set Google Client ID in settings");
         }
         
         let scopes = "https://www.googleapis.com/auth/drive.file";
@@ -70,10 +75,13 @@ impl DriveSync {
     }
 
     pub async fn exchange_code_for_token(&mut self, code: &str) -> Result<()> {
-        let client_id = std::env::var("GOOGLE_CLIENT_ID")
-            .unwrap_or_else(|_| DEFAULT_CLIENT_ID.to_string());
-        let client_secret = std::env::var("GOOGLE_CLIENT_SECRET")
-            .unwrap_or_else(|_| DEFAULT_CLIENT_SECRET.to_string());
+        let config = crate::config::load_config()?;
+        let client_id = config.client_id
+            .or_else(|| std::env::var("GOOGLE_CLIENT_ID").ok())
+            .unwrap_or_else(|| DEFAULT_CLIENT_ID.to_string());
+        let client_secret = config.client_secret
+            .or_else(|| std::env::var("GOOGLE_CLIENT_SECRET").ok())
+            .unwrap_or_else(|| DEFAULT_CLIENT_SECRET.to_string());
         
         let params = [
             ("code", code),
@@ -106,10 +114,13 @@ impl DriveSync {
         let refresh_token = self.refresh_token.as_ref()
             .context("No refresh token available")?;
         
-        let client_id = std::env::var("GOOGLE_CLIENT_ID")
-            .unwrap_or_else(|_| DEFAULT_CLIENT_ID.to_string());
-        let client_secret = std::env::var("GOOGLE_CLIENT_SECRET")
-            .unwrap_or_else(|_| DEFAULT_CLIENT_SECRET.to_string());
+        let config = crate::config::load_config()?;
+        let client_id = config.client_id
+            .or_else(|| std::env::var("GOOGLE_CLIENT_ID").ok())
+            .unwrap_or_else(|| DEFAULT_CLIENT_ID.to_string());
+        let client_secret = config.client_secret
+            .or_else(|| std::env::var("GOOGLE_CLIENT_SECRET").ok())
+            .unwrap_or_else(|| DEFAULT_CLIENT_SECRET.to_string());
         
         let params = [
             ("refresh_token", refresh_token),
@@ -214,13 +225,96 @@ impl DriveSync {
             .await
             .context("Failed to create folder")?;
         
-        let folder: DriveFile = response.json().await
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response.text().await.unwrap_or_default();
+            anyhow::bail!("Failed to create folder: {} - {}", status, error_text);
+        }
+        
+        let folder_data: serde_json::Value = response.json().await
             .context("Failed to parse folder creation response")?;
         
-        Ok(folder.id)
+        let folder_id = folder_data.get("id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("No 'id' field in folder creation response: {:?}", folder_data))?;
+        
+        Ok(folder_id.to_string())
     }
 
-    pub async fn upload_file(&mut self, file_path: &Path, folder_id: &str) -> Result<String> {
+    pub async fn find_or_create_subfolder(&mut self, parent_id: &str, folder_name: &str) -> Result<String> {
+        self.ensure_authenticated().await?;
+        let token = self.access_token.as_ref().unwrap();
+        
+        // Search for existing folder in parent
+        let query = format!("name='{}' and '{}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false", 
+            folder_name.replace("'", "\\'"), parent_id);
+        
+        let response = self.client
+            .get(&format!("{}/files", GOOGLE_DRIVE_API_BASE))
+            .bearer_auth(token)
+            .query(&[("q", &query), ("fields", &"files(id,name)".to_string())])
+            .send()
+            .await
+            .context("Failed to search for subfolder")?;
+        
+        let data: serde_json::Value = response.json().await
+            .context("Failed to parse subfolder search response")?;
+        
+        if let Some(files) = data.get("files").and_then(|f| f.as_array()) {
+            if let Some(first) = files.first() {
+                if let Some(id) = first.get("id").and_then(|i| i.as_str()) {
+                    return Ok(id.to_string());
+                }
+            }
+        }
+        
+        // Folder doesn't exist, create it
+        let folder_data = serde_json::json!({
+            "name": folder_name,
+            "mimeType": "application/vnd.google-apps.folder",
+            "parents": [parent_id]
+        });
+        
+        let response = self.client
+            .post(&format!("{}/files", GOOGLE_DRIVE_API_BASE))
+            .bearer_auth(token)
+            .json(&folder_data)
+            .send()
+            .await
+            .context("Failed to create subfolder")?;
+        
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response.text().await.unwrap_or_default();
+            anyhow::bail!("Failed to create subfolder: {} - {}", status, error_text);
+        }
+        
+        let folder_data: serde_json::Value = response.json().await
+            .context("Failed to parse subfolder creation response")?;
+        
+        let folder_id = folder_data.get("id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("No 'id' field in subfolder creation response: {:?}", folder_data))?;
+        
+        Ok(folder_id.to_string())
+    }
+
+    pub async fn get_folder_id_for_path(&mut self, root_id: &str, relative_path: &Path) -> Result<String> {
+        let mut current_id = root_id.to_string();
+        
+        for component in relative_path.components() {
+            if let Some(name) = component.as_os_str().to_str() {
+                if name == ".." || name == "/" || name == "." {
+                    continue;
+                }
+                current_id = self.find_or_create_subfolder(&current_id, name).await?;
+            }
+        }
+        
+        Ok(current_id)
+    }
+
+    pub async fn upload_file(&mut self, file_path: &Path, parent_folder_id: &str) -> Result<String> {
         self.ensure_authenticated().await?;
         let token = self.access_token.as_ref().unwrap();
         
@@ -228,9 +322,28 @@ impl DriveSync {
             .and_then(|n| n.to_str())
             .context("Invalid file name")?;
         
+        // Determine MIME type based on file extension
+        let mime_type = file_path.extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| match ext.to_lowercase().as_str() {
+                "zip" => "application/zip",
+                "json" => "application/json",
+                "txt" => "text/plain",
+                "html" => "text/html",
+                "css" => "text/css",
+                "js" => "application/javascript",
+                "png" => "image/png",
+                "jpg" | "jpeg" => "image/jpeg",
+                "pdf" => "application/pdf",
+                _ => "application/octet-stream",
+            })
+            .unwrap_or("application/octet-stream");
+        
+        crate::logger::log_info(&format!("Uploading {} with MIME type: {}", file_name, mime_type));
+        
         // Check if file already exists
         let query = format!("name='{}' and '{}' in parents and trashed=false", 
-            file_name.replace("'", "\\'"), folder_id);
+            file_name.replace("'", "\\'"), parent_folder_id);
         let response = self.client
             .get(&format!("{}/files", GOOGLE_DRIVE_API_BASE))
             .bearer_auth(token)
@@ -258,18 +371,20 @@ impl DriveSync {
         // Upload or update file
         if let Some(existing_id) = file_id {
             // Update existing file
-            let url = format!("{}/upload/drive/v3/files/{}", GOOGLE_DRIVE_API_BASE, existing_id);
+            let url = format!("https://www.googleapis.com/upload/drive/v3/files/{}?uploadType=media", existing_id);
             let response = self.client
                 .patch(&url)
                 .bearer_auth(token)
-                .header("Content-Type", "application/octet-stream")
+                .header("Content-Type", mime_type)
                 .body(file_data)
                 .send()
                 .await
                 .context("Failed to update file")?;
             
             if !response.status().is_success() {
-                anyhow::bail!("Failed to update file: {}", response.status());
+                let status = response.status();
+                let error_text = response.text().await.unwrap_or_default();
+                anyhow::bail!("Failed to update file: {} - {}", status, error_text);
             }
             
             Ok(existing_id)
@@ -277,18 +392,23 @@ impl DriveSync {
             // Create new file using multipart upload
             let metadata = serde_json::json!({
                 "name": file_name,
-                "parents": [folder_id]
+                "parents": [parent_folder_id]
             });
             
-            let form = reqwest::multipart::Form::new()
-                .text("metadata", serde_json::to_string(&metadata)?)
-                .part("file", reqwest::multipart::Part::bytes(file_data)
-                    .file_name(file_name.to_string())
-                    .mime_str("application/octet-stream")?);
+            let metadata_part = reqwest::multipart::Part::text(serde_json::to_string(&metadata)?)
+                .mime_str("application/json; charset=UTF-8")?;
             
-            let url = format!("{}/upload/drive/v3/files?uploadType=multipart", GOOGLE_DRIVE_API_BASE);
+            let file_part = reqwest::multipart::Part::bytes(file_data)
+                .file_name(file_name.to_string())
+                .mime_str(mime_type)?;
+
+            let form = reqwest::multipart::Form::new()
+                .part("metadata", metadata_part)
+                .part("file", file_part);
+            
+            let url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart";
             let response = self.client
-                .post(&url)
+                .post(url)
                 .bearer_auth(token)
                 .multipart(form)
                 .send()
@@ -298,9 +418,14 @@ impl DriveSync {
             // Check status and handle error or success
             let status = response.status();
             if status.is_success() {
-                let file: DriveFile = response.json().await
+                let data: serde_json::Value = response.json().await
                     .context("Failed to parse upload response")?;
-                Ok(file.id)
+                
+                let id = data.get("id")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| anyhow::anyhow!("No 'id' field in upload response: {:?}", data))?;
+                
+                Ok(id.to_string())
             } else {
                 let status_code = status.as_u16();
                 let error_text = response.text().await.unwrap_or_default();
@@ -348,5 +473,26 @@ impl DriveSync {
             .map(|s| s.to_string());
         
         Ok(())
+    }
+
+    pub fn is_authenticated() -> bool {
+        let data_dir = match crate::config::get_data_dir() {
+            Ok(dir) => dir,
+            Err(_) => return false,
+        };
+        let token_file = data_dir.join("tokens.json");
+        
+        if !token_file.exists() {
+            return false;
+        }
+
+        // We check if we have at least a refresh token, which means we can re-authenticate
+        if let Ok(content) = fs::read_to_string(&token_file) {
+            if let Ok(tokens) = serde_json::from_str::<serde_json::Value>(&content) {
+                return tokens.get("refresh_token").map_or(false, |v| !v.is_null());
+            }
+        }
+        
+        false
     }
 }

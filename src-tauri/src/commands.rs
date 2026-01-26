@@ -1,6 +1,7 @@
 use serde::Serialize;
 use std::path::PathBuf;
 use anyhow::Result;
+use zip::{write::FileOptions, CompressionMethod};
 
 #[tauri::command]
 pub fn get_config() -> Result<crate::config::Config, String> {
@@ -94,6 +95,8 @@ pub struct SyncResult {
 
 #[tauri::command]
 pub async fn sync_now() -> Result<SyncResult, String> {
+    crate::logger::log_info("=== Sync Now Command Started ===");
+    
     // Get configuration
     let config = crate::config::load_config()
         .map_err(|e| format!("Failed to load config: {}", e))?;
@@ -105,17 +108,202 @@ pub async fn sync_now() -> Result<SyncResult, String> {
     let staging_dir = crate::config::get_staging_dir()
         .map_err(|e| format!("Failed to get staging directory: {}", e))?;
     
-    // Create archive before sync
+    crate::logger::log_info(&format!("Staging directory: {:?}", staging_dir));
+    
+    // First, ensure all tracked files are copied to staging
+    let tracked_paths = crate::file_tracker::get_tracked_paths()
+        .map_err(|e| format!("Failed to get tracked paths: {}", e))?;
+    
+    if tracked_paths.is_empty() {
+        crate::logger::log_warn("No files or folders are being tracked");
+        return Ok(SyncResult {
+            files_synced: 0,
+            files_skipped: 0,
+            errors: vec!["No files or folders tracked. Please add files/folders first.".to_string()],
+        });
+    }
+    
+    crate::logger::log_info(&format!("Found {} tracked path(s)", tracked_paths.len()));
+    
+    // Copy all tracked files to staging if needed
+    let files = crate::file_tracker::get_all_files_to_sync()
+        .map_err(|e| format!("Failed to get files to sync: {}", e))?;
+    
+    crate::logger::log_info(&format!("Total files to process: {}", files.len()));
+    
+    for file_path in &files {
+        if !file_path.starts_with(&staging_dir) {
+            // File is outside staging, need to copy it
+            let tracked_paths = crate::file_tracker::get_tracked_paths()
+                .map_err(|e| format!("Failed to get tracked paths: {}", e))?;
+            
+            let mut found_base = None;
+            for tracked in &tracked_paths {
+                let tracked_buf = PathBuf::from(tracked);
+                if file_path.starts_with(&tracked_buf) {
+                    found_base = Some(tracked_buf);
+                    break;
+                }
+            }
+            
+            let relative_path = if let Some(ref base) = found_base {
+                if let Ok(rel) = file_path.strip_prefix(base) {
+                    if rel.as_os_str().is_empty() {
+                        let file_name = file_path.file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("unknown");
+                        staging_dir.join("tracked").join(file_name)
+                    } else {
+                        if let Some(base_name) = base.file_name() {
+                            staging_dir.join("tracked").join(base_name).join(rel)
+                        } else {
+                            staging_dir.join("tracked").join(rel)
+                        }
+                    }
+                } else {
+                    let file_name = file_path.file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("unknown");
+                    staging_dir.join("tracked").join(file_name)
+                }
+            } else {
+                let file_name = file_path.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("unknown");
+                staging_dir.join("tracked").join(file_name)
+            };
+            
+            if let Some(parent) = relative_path.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("Failed to create staging directory: {}", e))?;
+            }
+            
+            // Copy file to staging
+            if relative_path.exists() {
+                // If file exists, try to make it writable first to avoid permission denied errors
+                // when overwriting read-only files (like SSH keys)
+                if let Ok(metadata) = std::fs::metadata(&relative_path) {
+                    let mut permissions = metadata.permissions();
+                    if permissions.readonly() {
+                        #[allow(clippy::permissions_set_readonly_false)]
+                        permissions.set_readonly(false);
+                        let _ = std::fs::set_permissions(&relative_path, permissions);
+                    }
+                }
+                // Alternatively, remove the file first to ensure we can copy fresh
+                let _ = std::fs::remove_file(&relative_path);
+            }
+
+            if let Err(e) = std::fs::copy(file_path, &relative_path) {
+                let msg = format!("Failed to copy {} to {}: {}", file_path.display(), relative_path.display(), e);
+                crate::logger::log_error(&msg);
+                return Err(msg);
+            }
+            
+            crate::logger::log_info(&format!("Copied {} to staging", file_path.display()));
+        }
+    }
+    
+    // Create archive before sync (for version history)
     let archives_dir = crate::config::get_archives_dir()
         .map_err(|e| format!("Failed to get archives directory: {}", e))?;
     
     if let Err(e) = crate::version_manager::create_archive(&staging_dir, &archives_dir) {
-        eprintln!("Warning: Failed to create archive: {}", e);
+        crate::logger::log_warn(&format!("Warning: Failed to create archive: {}", e));
     }
     
-    // Get all files to sync
-    let files = crate::file_tracker::get_all_files_to_sync()
-        .map_err(|e| format!("Failed to get files to sync: {}", e))?;
+    // Create ZIP of staging directory for sync
+    crate::logger::log_info("Creating ZIP file of staging directory...");
+    let zip_path = staging_dir.join("backup.zip");
+    
+    // Check if ZIP exists and has changed
+    let zip_needs_sync = if zip_path.exists() {
+        // Check if staging directory has changed since last ZIP creation
+        let zip_modified = std::fs::metadata(&zip_path)
+            .and_then(|m| m.modified())
+            .ok();
+        
+        let staging_modified = std::fs::read_dir(&staging_dir)
+            .ok()
+            .and_then(|entries| {
+                entries
+                    .filter_map(|e| e.ok())
+                    .filter_map(|e| e.metadata().ok())
+                    .filter_map(|m| m.modified().ok())
+                    .max()
+            });
+        
+        match (zip_modified, staging_modified) {
+            (Some(zip_time), Some(staging_time)) => staging_time > zip_time,
+            _ => true, // If we can't determine, create new ZIP
+        }
+    } else {
+        true // ZIP doesn't exist, need to create it
+    };
+    
+    if zip_needs_sync {
+        crate::logger::log_info("Staging directory has changed, creating new ZIP...");
+        
+        // Create ZIP file
+        let file = std::fs::File::create(&zip_path)
+            .map_err(|e| format!("Failed to create ZIP file: {}", e))?;
+        let mut zip = zip::ZipWriter::new(file);
+        
+        // Add all files from staging directory to ZIP (excluding the zip file itself)
+        let entries = std::fs::read_dir(&staging_dir)
+            .map_err(|e| format!("Failed to read staging directory: {}", e))?;
+        
+        for entry in entries {
+            let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
+            let path = entry.path();
+            
+            // Skip the zip file itself
+            if path == zip_path {
+                continue;
+            }
+            
+            let relative_path = path.strip_prefix(&staging_dir)
+                .map_err(|e| format!("Failed to get relative path: {}", e))?;
+            
+            if path.is_file() {
+                let mut file = std::fs::File::open(&path)
+                    .map_err(|e| format!("Failed to open file: {}", e))?;
+                
+                zip.start_file(relative_path.to_string_lossy().as_ref(), FileOptions::default()
+                    .compression_method(CompressionMethod::Deflated))
+                    .map_err(|e| format!("Failed to add file to ZIP: {}", e))?;
+                
+                std::io::copy(&mut file, &mut zip)
+                    .map_err(|e| format!("Failed to write file to ZIP: {}", e))?;
+            } else if path.is_dir() {
+                zip.add_directory(relative_path.to_string_lossy().as_ref(), FileOptions::default())
+                    .map_err(|e| format!("Failed to add directory to ZIP: {}", e))?;
+                
+                crate::version_manager::add_directory_to_zip(&mut zip, &staging_dir, &path, relative_path.to_string_lossy().as_ref())
+                    .map_err(|e| format!("Failed to add directory contents to ZIP: {}", e))?;
+            }
+        }
+        
+        zip.finish()
+            .map_err(|e| format!("Failed to finalize ZIP: {}", e))?;
+        
+        crate::logger::log_info(&format!("ZIP file created: {:?}", zip_path));
+    } else {
+        crate::logger::log_info("Staging directory unchanged, using existing ZIP");
+    }
+    
+    // Check if ZIP has changed (for smart sync)
+    let zip_changed = crate::file_tracker::has_file_changed(&zip_path)
+        .map_err(|e| format!("Failed to check if ZIP changed: {}", e))?;
+    
+    if !zip_changed {
+        crate::logger::log_info("ZIP file has not changed, skipping upload");
+        return Ok(SyncResult {
+            files_synced: 0,
+            files_skipped: 1,
+            errors: vec![],
+        });
+    }
     
     // Initialize Drive sync
     let mut drive_sync = crate::drive_sync::DriveSync::new();
@@ -125,99 +313,32 @@ pub async fn sync_now() -> Result<SyncResult, String> {
         .await
         .map_err(|e| format!("Failed to find/create Drive folder: {}", e))?;
     
-    let mut files_synced = 0;
-    let mut files_skipped = 0;
-    let mut errors = Vec::new();
+    crate::logger::log_info(&format!("Drive folder ID: {}", folder_id));
     
-    // Process each file
-    for file_path in files {
-        // Check if file has changed
-        match crate::file_tracker::has_file_changed(&file_path) {
-            Ok(true) => {
-                // File has changed, need to sync
-                // Determine relative path for staging
-                let staging_file = if file_path.starts_with(&staging_dir) {
-                    // File is already in staging
-                    file_path.clone()
-                } else {
-                    // File is outside staging, need to copy it
-                    // Get relative path from original tracked path
-                    // Find which tracked path this file belongs to
-                    let tracked_paths = crate::file_tracker::get_tracked_paths()
-                        .map_err(|e| format!("Failed to get tracked paths: {}", e))?;
-                    
-                    let mut found_base = None;
-                    for tracked in &tracked_paths {
-                        let tracked_buf = PathBuf::from(tracked);
-                        if file_path.starts_with(&tracked_buf) {
-                            found_base = Some(tracked_buf);
-                            break;
-                        }
-                    }
-                    
-                    let relative_path = if let Some(base) = found_base {
-                        if let Ok(rel) = file_path.strip_prefix(&base) {
-                            staging_dir.join("tracked").join(rel)
-                        } else {
-                            // Fallback: use filename
-                            let file_name = file_path.file_name()
-                                .and_then(|n| n.to_str())
-                                .unwrap_or("unknown");
-                            staging_dir.join("tracked").join(file_name)
-                        }
-                    } else {
-                        // No base found, use filename
-                        let file_name = file_path.file_name()
-                            .and_then(|n| n.to_str())
-                            .unwrap_or("unknown");
-                        staging_dir.join("tracked").join(file_name)
-                    };
-                    
-                    // Ensure parent directories exist
-                    if let Some(parent) = relative_path.parent() {
-                        std::fs::create_dir_all(parent)
-                            .map_err(|e| format!("Failed to create staging directory: {}", e))?;
-                    }
-                    
-                    // Copy file to staging
-                    std::fs::copy(&file_path, &relative_path)
-                        .map_err(|e| format!("Failed to copy file to staging: {}", e))?;
-                    
-                    relative_path
-                };
-                
-                // Upload to Drive
-                match drive_sync.upload_file(&staging_file, &folder_id).await {
-                    Ok(_) => {
-                        // Mark as synced
-                        if let Err(e) = crate::file_tracker::mark_file_synced(&file_path) {
-                            errors.push(format!("Failed to mark {} as synced: {}", 
-                                file_path.display(), e));
-                        }
-                        files_synced += 1;
-                    }
-                    Err(e) => {
-                        errors.push(format!("Failed to upload {}: {}", 
-                            file_path.display(), e));
-                    }
-                }
+    // Upload ZIP file to Drive
+    crate::logger::log_info("Uploading ZIP file to Google Drive...");
+    match drive_sync.upload_file(&zip_path, &folder_id).await {
+        Ok(_) => {
+            // Mark ZIP as synced
+            if let Err(e) = crate::file_tracker::mark_file_synced(&zip_path) {
+                crate::logger::log_error(&format!("Failed to mark ZIP as synced: {}", e));
             }
-            Ok(false) => {
-                // File hasn't changed, skip
-                files_skipped += 1;
-            }
-            Err(e) => {
-                errors.push(format!("Failed to check {}: {}", 
-                    file_path.display(), e));
-            }
+            crate::logger::log_info("ZIP file uploaded successfully!");
+            Ok(SyncResult {
+                files_synced: 1,
+                files_skipped: 0,
+                errors: vec![],
+            })
+        }
+        Err(e) => {
+            crate::logger::log_error(&format!("Failed to upload ZIP: {}", e));
+            Ok(SyncResult {
+                files_synced: 0,
+                files_skipped: 0,
+                errors: vec![format!("Failed to upload ZIP file: {}", e)],
+            })
         }
     }
-    
-    Ok(SyncResult {
-        files_synced,
-        files_skipped,
-        errors,
-    })
 }
 
 #[derive(Serialize)]
@@ -280,5 +401,63 @@ pub async fn handle_oauth_code(code: String) -> Result<(), String> {
     drive_sync.handle_oauth_callback(&code)
         .await
         .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn check_auth_status() -> bool {
+    crate::drive_sync::DriveSync::is_authenticated()
+}
+
+#[tauri::command]
+pub async fn listen_for_oauth_code() -> Result<String, String> {
+    use tiny_http::{Server, Response};
+    use url::Url;
+
+    crate::logger::log_info("Starting local server to listen for OAuth code...");
+    
+    let server = Server::http(format!("127.0.0.1:{}", crate::drive_sync::REDIRECT_PORT))
+        .map_err(|e| format!("Failed to start local server: {}", e))?;
+
+    // Set a timeout for the server so it doesn't run forever if user cancels
+    // We'll wait for one request
+    if let Ok(request) = server.recv() {
+        let url = format!("http://localhost{}", request.url());
+        let parsed_url = Url::parse(&url).map_err(|e| format!("Failed to parse callback URL: {}", e))?;
+        
+        let code = parsed_url.query_pairs()
+            .find(|(key, _)| key == "code")
+            .map(|(_, value)| value.into_owned());
+
+        if let Some(code) = code {
+            let response = Response::from_string("Authentication successful! You can close this window and return to the app.");
+            let _ = request.respond(response);
+            crate::logger::log_info("OAuth code received successfully");
+            return Ok(code);
+        } else {
+            let response = Response::from_string("Authentication failed! No code found in request.");
+            let _ = request.respond(response);
+            return Err("No code found in the callback URL".to_string());
+        }
+    }
+
+    Err("Server closed without receiving a request".to_string())
+}
+
+#[tauri::command]
+pub fn set_google_client_id(id: String) -> Result<(), String> {
+    crate::config::update_config(|config| {
+        config.client_id = Some(id);
+    })
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_google_client_secret(secret: String) -> Result<(), String> {
+    crate::config::update_config(|config| {
+        config.client_secret = Some(secret);
+    })
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
