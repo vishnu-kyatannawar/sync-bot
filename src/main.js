@@ -1,6 +1,7 @@
 // Access Tauri APIs from the window object (since withGlobalTauri is enabled)
 const { invoke } = window.__TAURI__.core;
 const { open } = window.__TAURI__.dialog;
+const { listen } = window.__TAURI__.event;
 
 const APP_LOG_PREFIX = '[Sync Bot]';
 
@@ -44,7 +45,6 @@ const selectStagingDirBtn = document.getElementById('select-staging-dir');
 const addFileBtn = document.getElementById('add-file');
 const addFolderBtn = document.getElementById('add-folder');
 const logOutputEl = document.getElementById('log-output');
-const testJsBtn = document.getElementById('test-js');
 
 logDebug('Main.js loading - global APIs initialized');
 
@@ -118,14 +118,6 @@ function setupEventListeners() {
     if (!selectStagingDirBtn) {
         logError('CRITICAL: selectStagingDirBtn (Browse) NOT FOUND IN DOM');
         return;
-    }
-
-    if (testJsBtn) {
-        testJsBtn.addEventListener('click', () => {
-            console.log('Test UI button clicked');
-            alert('UI Interaction working! JavaScript is active.');
-            log('UI Test Successful', 'success');
-        });
     }
 
     selectStagingDirBtn.addEventListener('click', async () => {
@@ -218,24 +210,7 @@ function setupEventListeners() {
     }
 
     syncNowBtn.addEventListener('click', async () => {
-        try {
-            syncNowBtn.disabled = true;
-            syncStatusEl.textContent = 'Syncing...';
-            syncStatusEl.className = 'status-value syncing';
-            log('Starting sync...', 'info');
-
-            const result = await invoke('sync_now');
-            log(`Sync completed: ${result.files_synced} files synced`, 'success');
-            syncStatusEl.textContent = 'Sync Complete';
-            syncStatusEl.className = 'status-value success';
-            await updateStatus();
-        } catch (error) {
-            log(`Sync error: ${error}`, 'error');
-            syncStatusEl.textContent = 'Sync Failed';
-            syncStatusEl.className = 'status-value error';
-        } finally {
-            syncNowBtn.disabled = false;
-        }
+        await performSync();
     });
 
     authenticateBtn.addEventListener('click', async () => {
@@ -315,6 +290,33 @@ function setupEventListeners() {
     autoSyncEl.addEventListener('change', async () => {
         await invoke('set_auto_sync', { enabled: autoSyncEl.checked });
     });
+
+    // Listen for scheduled sync events from backend
+    listen('scheduled-sync', async () => {
+        logDebug('Scheduled sync event received');
+        await performSync();
+    });
+}
+
+async function performSync() {
+    try {
+        syncNowBtn.disabled = true;
+        syncStatusEl.textContent = 'Syncing...';
+        syncStatusEl.className = 'status-value syncing';
+        log('Starting sync...', 'info');
+
+        const result = await invoke('sync_now');
+        log(`Sync completed: ${result.files_synced} files synced`, 'success');
+        syncStatusEl.textContent = 'Sync Complete';
+        syncStatusEl.className = 'status-value success';
+        await updateStatus();
+    } catch (error) {
+        log(`Sync error: ${error}`, 'error');
+        syncStatusEl.textContent = 'Sync Failed';
+        syncStatusEl.className = 'status-value error';
+    } finally {
+        syncNowBtn.disabled = false;
+    }
 }
 
 async function updateAuthUI() {

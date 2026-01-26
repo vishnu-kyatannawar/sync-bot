@@ -54,6 +54,14 @@ pub fn init_database() -> Result<()> {
         [],
     )?;
 
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS app_metadata (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )",
+        [],
+    )?;
+
     Ok(())
 }
 
@@ -256,3 +264,25 @@ pub fn get_tracked_paths() -> Result<Vec<String>> {
     
     Ok(paths)
 }
+
+pub fn set_metadata(key: &str, value: &str) -> Result<()> {
+    let conn = get_connection()?;
+    conn.execute(
+        "INSERT OR REPLACE INTO app_metadata (key, value) VALUES (?1, ?2)",
+        rusqlite::params![key, value],
+    )?;
+    Ok(())
+}
+
+pub fn get_metadata(key: &str) -> Result<Option<String>> {
+    let conn = get_connection()?;
+    let mut stmt = conn.prepare("SELECT value FROM app_metadata WHERE key = ?")?;
+    let mut rows = stmt.query_map([key], |row| row.get::<_, String>(0))?;
+    
+    if let Some(row) = rows.next() {
+        Ok(Some(row?))
+    } else {
+        Ok(None)
+    }
+}
+

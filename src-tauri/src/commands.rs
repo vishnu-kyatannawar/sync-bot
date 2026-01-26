@@ -298,6 +298,14 @@ pub async fn sync_now() -> Result<SyncResult, String> {
     
     if !zip_changed {
         crate::logger::log_info("ZIP file has not changed, skipping upload");
+        
+        // Still update last sync time to show we checked
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let _ = crate::file_tracker::set_metadata("last_sync_time", &now.to_string());
+
         return Ok(SyncResult {
             files_synced: 0,
             files_skipped: 1,
@@ -323,6 +331,14 @@ pub async fn sync_now() -> Result<SyncResult, String> {
             if let Err(e) = crate::file_tracker::mark_file_synced(&zip_path) {
                 crate::logger::log_error(&format!("Failed to mark ZIP as synced: {}", e));
             }
+            
+            // Save last sync time
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let _ = crate::file_tracker::set_metadata("last_sync_time", &now.to_string());
+
             crate::logger::log_info("ZIP file uploaded successfully!");
             Ok(SyncResult {
                 files_synced: 1,
@@ -350,11 +366,24 @@ pub struct SyncStatus {
 
 #[tauri::command]
 pub fn get_sync_status() -> Result<SyncStatus, String> {
-    // Get last sync time from database
-    // For now, return placeholder
+    let last_sync = crate::file_tracker::get_metadata("last_sync_time")
+        .unwrap_or(None)
+        .and_then(|s| s.parse::<u64>().ok());
+    
+    // Calculate next sync if auto-sync is enabled
+    let mut next_sync = None;
+    if let Ok(config) = crate::config::load_config() {
+        if config.auto_sync.unwrap_or(false) {
+            if let Some(last) = last_sync {
+                let interval_secs = config.sync_interval.unwrap_or(60) * 60;
+                next_sync = Some(last + interval_secs);
+            }
+        }
+    }
+
     Ok(SyncStatus {
-        last_sync: None,
-        next_sync: None,
+        last_sync,
+        next_sync,
         is_syncing: false,
     })
 }
