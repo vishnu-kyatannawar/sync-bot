@@ -39,6 +39,8 @@ pub struct DriveSync {
     refresh_token: Option<String>,
 }
 
+const MAX_RETRIES: u32 = 3;
+
 impl DriveSync {
     pub fn new() -> Self {
         Self {
@@ -186,7 +188,28 @@ impl DriveSync {
         Ok(())
     }
 
+    async fn handle_auth_error(&mut self, response: &reqwest::Response) -> Result<bool> {
+        if response.status() == 401 {
+            crate::logger::log_warn("Access token expired, refreshing...");
+            if self.refresh_token.is_some() {
+                self.refresh_access_token().await?;
+                return Ok(true); // Token refreshed, retry
+            } else {
+                anyhow::bail!("Token expired and no refresh token available. Please re-authenticate.");
+            }
+        }
+        Ok(false) // No auth error, don't retry
+    }
+
     pub async fn find_or_create_folder(&mut self, folder_name: &str) -> Result<String> {
+        self.find_or_create_folder_with_retry(folder_name, 0).await
+    }
+
+    async fn find_or_create_folder_with_retry(&mut self, folder_name: &str, retry_count: u32) -> Result<String> {
+        if retry_count >= MAX_RETRIES {
+            anyhow::bail!("Max retries ({}) exceeded for find_or_create_folder", MAX_RETRIES);
+        }
+
         self.ensure_authenticated().await?;
         let token = self.access_token.as_ref().unwrap();
         
@@ -199,6 +222,16 @@ impl DriveSync {
             .send()
             .await
             .context("Failed to search for folder")?;
+        
+        // Check for auth error
+        if self.handle_auth_error(&response).await? {
+            crate::logger::log_info("Retrying find_or_create_folder after token refresh...");
+            return self.find_or_create_folder_with_retry(folder_name, retry_count + 1).await;
+        }
+        
+        if !response.status().is_success() {
+            anyhow::bail!("Failed to search for folder: {}", response.status());
+        }
         
         let data: serde_json::Value = response.json().await
             .context("Failed to parse folder search response")?;
@@ -217,6 +250,7 @@ impl DriveSync {
             "mimeType": "application/vnd.google-apps.folder"
         });
         
+        let token = self.access_token.as_ref().unwrap();
         let response = self.client
             .post(&format!("{}/files", GOOGLE_DRIVE_API_BASE))
             .bearer_auth(token)
@@ -224,6 +258,12 @@ impl DriveSync {
             .send()
             .await
             .context("Failed to create folder")?;
+        
+        // Check for auth error
+        if self.handle_auth_error(&response).await? {
+            crate::logger::log_info("Retrying find_or_create_folder (creation) after token refresh...");
+            return self.find_or_create_folder_with_retry(folder_name, retry_count + 1).await;
+        }
         
         if !response.status().is_success() {
             let status = response.status();
@@ -242,6 +282,14 @@ impl DriveSync {
     }
 
     pub async fn find_or_create_subfolder(&mut self, parent_id: &str, folder_name: &str) -> Result<String> {
+        self.find_or_create_subfolder_with_retry(parent_id, folder_name, 0).await
+    }
+
+    async fn find_or_create_subfolder_with_retry(&mut self, parent_id: &str, folder_name: &str, retry_count: u32) -> Result<String> {
+        if retry_count >= MAX_RETRIES {
+            anyhow::bail!("Max retries ({}) exceeded for find_or_create_subfolder", MAX_RETRIES);
+        }
+
         self.ensure_authenticated().await?;
         let token = self.access_token.as_ref().unwrap();
         
@@ -256,6 +304,16 @@ impl DriveSync {
             .send()
             .await
             .context("Failed to search for subfolder")?;
+        
+        // Check for auth error
+        if self.handle_auth_error(&response).await? {
+            crate::logger::log_info("Retrying find_or_create_subfolder after token refresh...");
+            return self.find_or_create_subfolder_with_retry(parent_id, folder_name, retry_count + 1).await;
+        }
+        
+        if !response.status().is_success() {
+            anyhow::bail!("Failed to search for subfolder: {}", response.status());
+        }
         
         let data: serde_json::Value = response.json().await
             .context("Failed to parse subfolder search response")?;
@@ -275,6 +333,7 @@ impl DriveSync {
             "parents": [parent_id]
         });
         
+        let token = self.access_token.as_ref().unwrap();
         let response = self.client
             .post(&format!("{}/files", GOOGLE_DRIVE_API_BASE))
             .bearer_auth(token)
@@ -282,6 +341,12 @@ impl DriveSync {
             .send()
             .await
             .context("Failed to create subfolder")?;
+        
+        // Check for auth error
+        if self.handle_auth_error(&response).await? {
+            crate::logger::log_info("Retrying find_or_create_subfolder (creation) after token refresh...");
+            return self.find_or_create_subfolder_with_retry(parent_id, folder_name, retry_count + 1).await;
+        }
         
         if !response.status().is_success() {
             let status = response.status();
@@ -315,6 +380,14 @@ impl DriveSync {
     }
 
     pub async fn upload_file(&mut self, file_path: &Path, parent_folder_id: &str) -> Result<String> {
+        self.upload_file_with_retry(file_path, parent_folder_id, 0).await
+    }
+
+    async fn upload_file_with_retry(&mut self, file_path: &Path, parent_folder_id: &str, retry_count: u32) -> Result<String> {
+        if retry_count >= MAX_RETRIES {
+            anyhow::bail!("Max retries ({}) exceeded for upload_file", MAX_RETRIES);
+        }
+
         self.ensure_authenticated().await?;
         let token = self.access_token.as_ref().unwrap();
         
@@ -352,6 +425,16 @@ impl DriveSync {
             .await
             .context("Failed to check for existing file")?;
         
+        // Check for auth error
+        if self.handle_auth_error(&response).await? {
+            crate::logger::log_info("Retrying upload_file after token refresh...");
+            return self.upload_file_with_retry(file_path, parent_folder_id, retry_count + 1).await;
+        }
+        
+        if !response.status().is_success() {
+            anyhow::bail!("Failed to check for existing file: {}", response.status());
+        }
+        
         let data: serde_json::Value = response.json().await
             .context("Failed to parse file check response")?;
         
@@ -372,14 +455,21 @@ impl DriveSync {
         if let Some(existing_id) = file_id {
             // Update existing file
             let url = format!("https://www.googleapis.com/upload/drive/v3/files/{}?uploadType=media", existing_id);
+            let token = self.access_token.as_ref().unwrap();
             let response = self.client
                 .patch(&url)
                 .bearer_auth(token)
                 .header("Content-Type", mime_type)
-                .body(file_data)
+                .body(file_data.clone())
                 .send()
                 .await
                 .context("Failed to update file")?;
+            
+            // Check for auth error
+            if self.handle_auth_error(&response).await? {
+                crate::logger::log_info("Retrying upload_file (update) after token refresh...");
+                return self.upload_file_with_retry(file_path, parent_folder_id, retry_count + 1).await;
+            }
             
             if !response.status().is_success() {
                 let status = response.status();
@@ -407,6 +497,7 @@ impl DriveSync {
                 .part("file", file_part);
             
             let url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart";
+            let token = self.access_token.as_ref().unwrap();
             let response = self.client
                 .post(url)
                 .bearer_auth(token)
@@ -414,6 +505,12 @@ impl DriveSync {
                 .send()
                 .await
                 .context("Failed to upload file")?;
+            
+            // Check for auth error
+            if self.handle_auth_error(&response).await? {
+                crate::logger::log_info("Retrying upload_file (new file) after token refresh...");
+                return self.upload_file_with_retry(file_path, parent_folder_id, retry_count + 1).await;
+            }
             
             // Check status and handle error or success
             let status = response.status();
