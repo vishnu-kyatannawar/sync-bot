@@ -8,6 +8,9 @@ mod version_manager;
 mod scheduler;
 mod logger;
 
+use tauri::{Manager, menu::{Menu, MenuItem}, tray::{TrayIconBuilder, TrayIconEvent}};
+use tauri::Emitter;
+
 fn main() {
     // Initialize logger first
     if let Err(e) = logger::init_logger() {
@@ -51,6 +54,22 @@ fn main() {
                 scheduler::start_scheduler(app_handle).await;
             });
 
+            // Setup system tray
+            logger::log_info("Setting up system tray...");
+            setup_tray(app)?;
+
+            // Handle window close event to minimize to tray
+            let window = app.get_webview_window("main").unwrap();
+            let window_clone = window.clone();
+            window.on_window_event(move |event| {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    // Prevent window from closing, hide it instead
+                    api.prevent_close();
+                    let _ = window_clone.hide();
+                    logger::log_info("Window hidden to system tray");
+                }
+            });
+
             logger::log_info("Tauri setup completed successfully");
             Ok(())
         })
@@ -78,4 +97,56 @@ fn main() {
         .expect("error while running tauri application");
     
     logger::log_info("=== Sync Bot Stopped ===");
+}
+
+fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    // Create tray menu
+    let show_item = MenuItem::with_id(app, "show", "Show Window", true, None::<&str>)?;
+    let sync_item = MenuItem::with_id(app, "sync", "Sync Now", true, None::<&str>)?;
+    let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+    
+    let menu = Menu::with_items(app, &[&show_item, &sync_item, &quit_item])?;
+    
+    // Build tray icon
+    let _tray = TrayIconBuilder::new()
+        .icon(app.default_window_icon().unwrap().clone())
+        .menu(&menu)
+        .on_menu_event(|app, event| {
+            match event.id.as_ref() {
+                "show" => {
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                        logger::log_info("Window shown from tray");
+                    }
+                }
+                "sync" => {
+                    logger::log_info("Sync triggered from tray menu");
+                    let _ = app.emit("tray-sync-requested", ());
+                }
+                "quit" => {
+                    logger::log_info("Quit requested from tray");
+                    app.exit(0);
+                }
+                _ => {}
+            }
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click { button, .. } = event {
+                if button == tauri::tray::MouseButton::Left {
+                    let app = tray.app_handle();
+                    if let Some(window) = app.get_webview_window("main") {
+                        if window.is_visible().unwrap_or(false) {
+                            let _ = window.hide();
+                        } else {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                }
+            }
+        })
+        .build(app)?;
+    
+    Ok(())
 }

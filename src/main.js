@@ -296,6 +296,12 @@ function setupEventListeners() {
         logDebug('Scheduled sync event received');
         await performSync();
     });
+
+    // Listen for tray sync events
+    listen('tray-sync-requested', async () => {
+        logDebug('Tray sync event received');
+        await performSync();
+    });
 }
 
 async function performSync() {
