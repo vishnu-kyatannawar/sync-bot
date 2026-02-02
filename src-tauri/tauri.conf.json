@@ -1,6 +1,6 @@
 {
   "productName": "Sync Bot",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "identifier": "com.syncbot.app",
   "build": {
     "beforeDevCommand": "",

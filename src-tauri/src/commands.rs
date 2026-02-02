@@ -4,7 +4,7 @@ use anyhow::Result;
 
 #[tauri::command]
 pub fn get_version() -> String {
-    "1.0.0".to_string()
+    "2.0.0".to_string()
 }
 
 #[tauri::command]
