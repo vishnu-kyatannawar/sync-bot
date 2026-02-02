@@ -202,166 +202,174 @@ impl DriveSync {
     }
 
     pub async fn find_or_create_folder(&mut self, folder_name: &str) -> Result<String> {
-        self.find_or_create_folder_with_retry(folder_name, 0).await
-    }
-
-    async fn find_or_create_folder_with_retry(&mut self, folder_name: &str, retry_count: u32) -> Result<String> {
-        if retry_count >= MAX_RETRIES {
-            anyhow::bail!("Max retries ({}) exceeded for find_or_create_folder", MAX_RETRIES);
-        }
-
-        self.ensure_authenticated().await?;
-        let token = self.access_token.as_ref().unwrap();
-        
-        // Search for existing folder
-        let query = format!("name='{}' and mimeType='application/vnd.google-apps.folder' and trashed=false", folder_name);
-        let response = self.client
-            .get(&format!("{}/files", GOOGLE_DRIVE_API_BASE))
-            .bearer_auth(token)
-            .query(&[("q", &query), ("fields", &"files(id,name)".to_string())])
-            .send()
-            .await
-            .context("Failed to search for folder")?;
-        
-        // Check for auth error
-        if self.handle_auth_error(&response).await? {
-            crate::logger::log_info("Retrying find_or_create_folder after token refresh...");
-            return self.find_or_create_folder_with_retry(folder_name, retry_count + 1).await;
-        }
-        
-        if !response.status().is_success() {
-            anyhow::bail!("Failed to search for folder: {}", response.status());
-        }
-        
-        let data: serde_json::Value = response.json().await
-            .context("Failed to parse folder search response")?;
-        
-        if let Some(files) = data.get("files").and_then(|f| f.as_array()) {
-            if let Some(first) = files.first() {
-                if let Some(id) = first.get("id").and_then(|i| i.as_str()) {
-                    return Ok(id.to_string());
+        for retry_count in 0..MAX_RETRIES {
+            self.ensure_authenticated().await?;
+            let token = self.access_token.as_ref().unwrap();
+            
+            // Search for existing folder
+            let query = format!("name='{}' and mimeType='application/vnd.google-apps.folder' and trashed=false", folder_name);
+            let response = self.client
+                .get(&format!("{}/files", GOOGLE_DRIVE_API_BASE))
+                .bearer_auth(token)
+                .query(&[("q", &query), ("fields", &"files(id,name)".to_string())])
+                .send()
+                .await
+                .context("Failed to search for folder")?;
+            
+            // Check for auth error
+            if self.handle_auth_error(&response).await? {
+                crate::logger::log_info(&format!("Retrying find_or_create_folder (attempt {}/{})", retry_count + 1, MAX_RETRIES));
+                continue;
+            }
+            
+            if !response.status().is_success() {
+                if retry_count < MAX_RETRIES - 1 {
+                    crate::logger::log_warn(&format!("Search failed, retrying (attempt {}/{})", retry_count + 1, MAX_RETRIES));
+                    continue;
+                }
+                anyhow::bail!("Failed to search for folder: {}", response.status());
+            }
+            
+            let data: serde_json::Value = response.json().await
+                .context("Failed to parse folder search response")?;
+            
+            if let Some(files) = data.get("files").and_then(|f| f.as_array()) {
+                if let Some(first) = files.first() {
+                    if let Some(id) = first.get("id").and_then(|i| i.as_str()) {
+                        return Ok(id.to_string());
+                    }
                 }
             }
+            
+            // Folder doesn't exist, create it
+            let folder_data = serde_json::json!({
+                "name": folder_name,
+                "mimeType": "application/vnd.google-apps.folder"
+            });
+            
+            let token = self.access_token.as_ref().unwrap();
+            let response = self.client
+                .post(&format!("{}/files", GOOGLE_DRIVE_API_BASE))
+                .bearer_auth(token)
+                .json(&folder_data)
+                .send()
+                .await
+                .context("Failed to create folder")?;
+            
+            // Check for auth error
+            if self.handle_auth_error(&response).await? {
+                crate::logger::log_info(&format!("Retrying folder creation (attempt {}/{})", retry_count + 1, MAX_RETRIES));
+                continue;
+            }
+            
+            if !response.status().is_success() {
+                let status = response.status();
+                let error_text = response.text().await.unwrap_or_default();
+                if retry_count < MAX_RETRIES - 1 {
+                    crate::logger::log_warn(&format!("Folder creation failed, retrying (attempt {}/{})", retry_count + 1, MAX_RETRIES));
+                    continue;
+                }
+                anyhow::bail!("Failed to create folder: {} - {}", status, error_text);
+            }
+            
+            let folder_data: serde_json::Value = response.json().await
+                .context("Failed to parse folder creation response")?;
+            
+            let folder_id = folder_data.get("id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("No 'id' field in folder creation response: {:?}", folder_data))?;
+            
+            return Ok(folder_id.to_string());
         }
         
-        // Folder doesn't exist, create it
-        let folder_data = serde_json::json!({
-            "name": folder_name,
-            "mimeType": "application/vnd.google-apps.folder"
-        });
-        
-        let token = self.access_token.as_ref().unwrap();
-        let response = self.client
-            .post(&format!("{}/files", GOOGLE_DRIVE_API_BASE))
-            .bearer_auth(token)
-            .json(&folder_data)
-            .send()
-            .await
-            .context("Failed to create folder")?;
-        
-        // Check for auth error
-        if self.handle_auth_error(&response).await? {
-            crate::logger::log_info("Retrying find_or_create_folder (creation) after token refresh...");
-            return self.find_or_create_folder_with_retry(folder_name, retry_count + 1).await;
-        }
-        
-        if !response.status().is_success() {
-            let status = response.status();
-            let error_text = response.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to create folder: {} - {}", status, error_text);
-        }
-        
-        let folder_data: serde_json::Value = response.json().await
-            .context("Failed to parse folder creation response")?;
-        
-        let folder_id = folder_data.get("id")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("No 'id' field in folder creation response: {:?}", folder_data))?;
-        
-        Ok(folder_id.to_string())
+        anyhow::bail!("Max retries ({}) exceeded for find_or_create_folder", MAX_RETRIES)
     }
 
     pub async fn find_or_create_subfolder(&mut self, parent_id: &str, folder_name: &str) -> Result<String> {
-        self.find_or_create_subfolder_with_retry(parent_id, folder_name, 0).await
-    }
-
-    async fn find_or_create_subfolder_with_retry(&mut self, parent_id: &str, folder_name: &str, retry_count: u32) -> Result<String> {
-        if retry_count >= MAX_RETRIES {
-            anyhow::bail!("Max retries ({}) exceeded for find_or_create_subfolder", MAX_RETRIES);
-        }
-
-        self.ensure_authenticated().await?;
-        let token = self.access_token.as_ref().unwrap();
-        
-        // Search for existing folder in parent
-        let query = format!("name='{}' and '{}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false", 
-            folder_name.replace("'", "\\'"), parent_id);
-        
-        let response = self.client
-            .get(&format!("{}/files", GOOGLE_DRIVE_API_BASE))
-            .bearer_auth(token)
-            .query(&[("q", &query), ("fields", &"files(id,name)".to_string())])
-            .send()
-            .await
-            .context("Failed to search for subfolder")?;
-        
-        // Check for auth error
-        if self.handle_auth_error(&response).await? {
-            crate::logger::log_info("Retrying find_or_create_subfolder after token refresh...");
-            return self.find_or_create_subfolder_with_retry(parent_id, folder_name, retry_count + 1).await;
-        }
-        
-        if !response.status().is_success() {
-            anyhow::bail!("Failed to search for subfolder: {}", response.status());
-        }
-        
-        let data: serde_json::Value = response.json().await
-            .context("Failed to parse subfolder search response")?;
-        
-        if let Some(files) = data.get("files").and_then(|f| f.as_array()) {
-            if let Some(first) = files.first() {
-                if let Some(id) = first.get("id").and_then(|i| i.as_str()) {
-                    return Ok(id.to_string());
+        for retry_count in 0..MAX_RETRIES {
+            self.ensure_authenticated().await?;
+            let token = self.access_token.as_ref().unwrap();
+            
+            // Search for existing folder in parent
+            let query = format!("name='{}' and '{}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false", 
+                folder_name.replace("'", "\\'"), parent_id);
+            
+            let response = self.client
+                .get(&format!("{}/files", GOOGLE_DRIVE_API_BASE))
+                .bearer_auth(token)
+                .query(&[("q", &query), ("fields", &"files(id,name)".to_string())])
+                .send()
+                .await
+                .context("Failed to search for subfolder")?;
+            
+            // Check for auth error
+            if self.handle_auth_error(&response).await? {
+                crate::logger::log_info(&format!("Retrying find_or_create_subfolder (attempt {}/{})", retry_count + 1, MAX_RETRIES));
+                continue;
+            }
+            
+            if !response.status().is_success() {
+                if retry_count < MAX_RETRIES - 1 {
+                    crate::logger::log_warn(&format!("Subfolder search failed, retrying (attempt {}/{})", retry_count + 1, MAX_RETRIES));
+                    continue;
+                }
+                anyhow::bail!("Failed to search for subfolder: {}", response.status());
+            }
+            
+            let data: serde_json::Value = response.json().await
+                .context("Failed to parse subfolder search response")?;
+            
+            if let Some(files) = data.get("files").and_then(|f| f.as_array()) {
+                if let Some(first) = files.first() {
+                    if let Some(id) = first.get("id").and_then(|i| i.as_str()) {
+                        return Ok(id.to_string());
+                    }
                 }
             }
+            
+            // Folder doesn't exist, create it
+            let folder_data = serde_json::json!({
+                "name": folder_name,
+                "mimeType": "application/vnd.google-apps.folder",
+                "parents": [parent_id]
+            });
+            
+            let token = self.access_token.as_ref().unwrap();
+            let response = self.client
+                .post(&format!("{}/files", GOOGLE_DRIVE_API_BASE))
+                .bearer_auth(token)
+                .json(&folder_data)
+                .send()
+                .await
+                .context("Failed to create subfolder")?;
+            
+            // Check for auth error
+            if self.handle_auth_error(&response).await? {
+                crate::logger::log_info(&format!("Retrying subfolder creation (attempt {}/{})", retry_count + 1, MAX_RETRIES));
+                continue;
+            }
+            
+            if !response.status().is_success() {
+                let status = response.status();
+                let error_text = response.text().await.unwrap_or_default();
+                if retry_count < MAX_RETRIES - 1 {
+                    crate::logger::log_warn(&format!("Subfolder creation failed, retrying (attempt {}/{})", retry_count + 1, MAX_RETRIES));
+                    continue;
+                }
+                anyhow::bail!("Failed to create subfolder: {} - {}", status, error_text);
+            }
+            
+            let folder_data: serde_json::Value = response.json().await
+                .context("Failed to parse subfolder creation response")?;
+            
+            let folder_id = folder_data.get("id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("No 'id' field in subfolder creation response: {:?}", folder_data))?;
+            
+            return Ok(folder_id.to_string());
         }
         
-        // Folder doesn't exist, create it
-        let folder_data = serde_json::json!({
-            "name": folder_name,
-            "mimeType": "application/vnd.google-apps.folder",
-            "parents": [parent_id]
-        });
-        
-        let token = self.access_token.as_ref().unwrap();
-        let response = self.client
-            .post(&format!("{}/files", GOOGLE_DRIVE_API_BASE))
-            .bearer_auth(token)
-            .json(&folder_data)
-            .send()
-            .await
-            .context("Failed to create subfolder")?;
-        
-        // Check for auth error
-        if self.handle_auth_error(&response).await? {
-            crate::logger::log_info("Retrying find_or_create_subfolder (creation) after token refresh...");
-            return self.find_or_create_subfolder_with_retry(parent_id, folder_name, retry_count + 1).await;
-        }
-        
-        if !response.status().is_success() {
-            let status = response.status();
-            let error_text = response.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to create subfolder: {} - {}", status, error_text);
-        }
-        
-        let folder_data: serde_json::Value = response.json().await
-            .context("Failed to parse subfolder creation response")?;
-        
-        let folder_id = folder_data.get("id")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("No 'id' field in subfolder creation response: {:?}", folder_data))?;
-        
-        Ok(folder_id.to_string())
+        anyhow::bail!("Max retries ({}) exceeded for find_or_create_subfolder", MAX_RETRIES)
     }
 
     pub async fn get_folder_id_for_path(&mut self, root_id: &str, relative_path: &Path) -> Result<String> {
@@ -380,17 +388,6 @@ impl DriveSync {
     }
 
     pub async fn upload_file(&mut self, file_path: &Path, parent_folder_id: &str) -> Result<String> {
-        self.upload_file_with_retry(file_path, parent_folder_id, 0).await
-    }
-
-    async fn upload_file_with_retry(&mut self, file_path: &Path, parent_folder_id: &str, retry_count: u32) -> Result<String> {
-        if retry_count >= MAX_RETRIES {
-            anyhow::bail!("Max retries ({}) exceeded for upload_file", MAX_RETRIES);
-        }
-
-        self.ensure_authenticated().await?;
-        let token = self.access_token.as_ref().unwrap();
-        
         let file_name = file_path.file_name()
             .and_then(|n| n.to_str())
             .context("Invalid file name")?;
@@ -414,121 +411,140 @@ impl DriveSync {
         
         crate::logger::log_info(&format!("Uploading {} with MIME type: {}", file_name, mime_type));
         
-        // Check if file already exists
-        let query = format!("name='{}' and '{}' in parents and trashed=false", 
-            file_name.replace("'", "\\'"), parent_folder_id);
-        let response = self.client
-            .get(&format!("{}/files", GOOGLE_DRIVE_API_BASE))
-            .bearer_auth(token)
-            .query(&[("q", &query), ("fields", &"files(id)".to_string())])
-            .send()
-            .await
-            .context("Failed to check for existing file")?;
-        
-        // Check for auth error
-        if self.handle_auth_error(&response).await? {
-            crate::logger::log_info("Retrying upload_file after token refresh...");
-            return self.upload_file_with_retry(file_path, parent_folder_id, retry_count + 1).await;
-        }
-        
-        if !response.status().is_success() {
-            anyhow::bail!("Failed to check for existing file: {}", response.status());
-        }
-        
-        let data: serde_json::Value = response.json().await
-            .context("Failed to parse file check response")?;
-        
-        let file_id = if let Some(files) = data.get("files").and_then(|f| f.as_array()) {
-            files.first()
-                .and_then(|f| f.get("id"))
-                .and_then(|i| i.as_str())
-                .map(|s| s.to_string())
-        } else {
-            None
-        };
-        
-        // Read file
+        // Read file once
         let file_data = fs::read(file_path)
             .context("Failed to read file")?;
         
-        // Upload or update file
-        if let Some(existing_id) = file_id {
-            // Update existing file
-            let url = format!("https://www.googleapis.com/upload/drive/v3/files/{}?uploadType=media", existing_id);
+        for retry_count in 0..MAX_RETRIES {
+            self.ensure_authenticated().await?;
             let token = self.access_token.as_ref().unwrap();
+            
+            // Check if file already exists
+            let query = format!("name='{}' and '{}' in parents and trashed=false", 
+                file_name.replace("'", "\\'"), parent_folder_id);
             let response = self.client
-                .patch(&url)
+                .get(&format!("{}/files", GOOGLE_DRIVE_API_BASE))
                 .bearer_auth(token)
-                .header("Content-Type", mime_type)
-                .body(file_data.clone())
+                .query(&[("q", &query), ("fields", &"files(id)".to_string())])
                 .send()
                 .await
-                .context("Failed to update file")?;
+                .context("Failed to check for existing file")?;
             
             // Check for auth error
             if self.handle_auth_error(&response).await? {
-                crate::logger::log_info("Retrying upload_file (update) after token refresh...");
-                return self.upload_file_with_retry(file_path, parent_folder_id, retry_count + 1).await;
+                crate::logger::log_info(&format!("Retrying upload_file (attempt {}/{})", retry_count + 1, MAX_RETRIES));
+                continue;
             }
             
             if !response.status().is_success() {
-                let status = response.status();
-                let error_text = response.text().await.unwrap_or_default();
-                anyhow::bail!("Failed to update file: {} - {}", status, error_text);
+                if retry_count < MAX_RETRIES - 1 {
+                    crate::logger::log_warn(&format!("File check failed, retrying (attempt {}/{})", retry_count + 1, MAX_RETRIES));
+                    continue;
+                }
+                anyhow::bail!("Failed to check for existing file: {}", response.status());
             }
             
-            Ok(existing_id)
-        } else {
-            // Create new file using multipart upload
-            let metadata = serde_json::json!({
-                "name": file_name,
-                "parents": [parent_folder_id]
-            });
+            let data: serde_json::Value = response.json().await
+                .context("Failed to parse file check response")?;
             
-            let metadata_part = reqwest::multipart::Part::text(serde_json::to_string(&metadata)?)
-                .mime_str("application/json; charset=UTF-8")?;
-            
-            let file_part = reqwest::multipart::Part::bytes(file_data)
-                .file_name(file_name.to_string())
-                .mime_str(mime_type)?;
-
-            let form = reqwest::multipart::Form::new()
-                .part("metadata", metadata_part)
-                .part("file", file_part);
-            
-            let url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart";
-            let token = self.access_token.as_ref().unwrap();
-            let response = self.client
-                .post(url)
-                .bearer_auth(token)
-                .multipart(form)
-                .send()
-                .await
-                .context("Failed to upload file")?;
-            
-            // Check for auth error
-            if self.handle_auth_error(&response).await? {
-                crate::logger::log_info("Retrying upload_file (new file) after token refresh...");
-                return self.upload_file_with_retry(file_path, parent_folder_id, retry_count + 1).await;
-            }
-            
-            // Check status and handle error or success
-            let status = response.status();
-            if status.is_success() {
-                let data: serde_json::Value = response.json().await
-                    .context("Failed to parse upload response")?;
-                
-                let id = data.get("id")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| anyhow::anyhow!("No 'id' field in upload response: {:?}", data))?;
-                
-                Ok(id.to_string())
+            let file_id = if let Some(files) = data.get("files").and_then(|f| f.as_array()) {
+                files.first()
+                    .and_then(|f| f.get("id"))
+                    .and_then(|i| i.as_str())
+                    .map(|s| s.to_string())
             } else {
-                let status_code = status.as_u16();
-                let error_text = response.text().await.unwrap_or_default();
-                anyhow::bail!("Failed to upload file: {} - {}", status_code, error_text);
+                None
+            };
+            
+            // Upload or update file
+            if let Some(existing_id) = file_id {
+                // Update existing file
+                let url = format!("https://www.googleapis.com/upload/drive/v3/files/{}?uploadType=media", existing_id);
+                let token = self.access_token.as_ref().unwrap();
+                let response = self.client
+                    .patch(&url)
+                    .bearer_auth(token)
+                    .header("Content-Type", mime_type)
+                    .body(file_data.clone())
+                    .send()
+                    .await
+                    .context("Failed to update file")?;
+                
+                // Check for auth error
+                if self.handle_auth_error(&response).await? {
+                    crate::logger::log_info(&format!("Retrying file update (attempt {}/{})", retry_count + 1, MAX_RETRIES));
+                    continue;
+                }
+                
+                if !response.status().is_success() {
+                    let status = response.status();
+                    let error_text = response.text().await.unwrap_or_default();
+                    if retry_count < MAX_RETRIES - 1 {
+                        crate::logger::log_warn(&format!("File update failed, retrying (attempt {}/{})", retry_count + 1, MAX_RETRIES));
+                        continue;
+                    }
+                    anyhow::bail!("Failed to update file: {} - {}", status, error_text);
+                }
+                
+                return Ok(existing_id);
+            } else {
+                // Create new file using multipart upload
+                let metadata = serde_json::json!({
+                    "name": file_name,
+                    "parents": [parent_folder_id]
+                });
+                
+                let metadata_part = reqwest::multipart::Part::text(serde_json::to_string(&metadata)?)
+                    .mime_str("application/json; charset=UTF-8")?;
+                
+                let file_part = reqwest::multipart::Part::bytes(file_data.clone())
+                    .file_name(file_name.to_string())
+                    .mime_str(mime_type)?;
+
+                let form = reqwest::multipart::Form::new()
+                    .part("metadata", metadata_part)
+                    .part("file", file_part);
+                
+                let url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart";
+                let token = self.access_token.as_ref().unwrap();
+                let response = self.client
+                    .post(url)
+                    .bearer_auth(token)
+                    .multipart(form)
+                    .send()
+                    .await
+                    .context("Failed to upload file")?;
+                
+                // Check for auth error
+                if self.handle_auth_error(&response).await? {
+                    crate::logger::log_info(&format!("Retrying file upload (attempt {}/{})", retry_count + 1, MAX_RETRIES));
+                    continue;
+                }
+                
+                // Check status and handle error or success
+                let status = response.status();
+                if status.is_success() {
+                    let data: serde_json::Value = response.json().await
+                        .context("Failed to parse upload response")?;
+                    
+                    let id = data.get("id")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| anyhow::anyhow!("No 'id' field in upload response: {:?}", data))?;
+                    
+                    return Ok(id.to_string());
+                } else {
+                    let status_code = status.as_u16();
+                    let error_text = response.text().await.unwrap_or_default();
+                    if retry_count < MAX_RETRIES - 1 {
+                        crate::logger::log_warn(&format!("File upload failed, retrying (attempt {}/{})", retry_count + 1, MAX_RETRIES));
+                        continue;
+                    }
+                    anyhow::bail!("Failed to upload file: {} - {}", status_code, error_text);
+                }
             }
         }
+        
+        anyhow::bail!("Max retries ({}) exceeded for upload_file", MAX_RETRIES)
     }
 
     fn save_tokens(&self) -> Result<()> {

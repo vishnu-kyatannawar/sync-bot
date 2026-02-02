@@ -1,7 +1,6 @@
 use serde::Serialize;
 use std::path::PathBuf;
 use anyhow::Result;
-use zip::{write::FileOptions, CompressionMethod};
 
 #[tauri::command]
 pub fn get_version() -> String {
